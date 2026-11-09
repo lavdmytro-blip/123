@@ -1,7 +1,7 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import {motion,AnimatePresence} from 'framer-motion'
-import {Activity,ArrowDownRight,ArrowRight,ArrowUpRight,Bell,BellRing,Check,ChevronDown,Clock,Compass,Flame,Heart,History,Info,LoaderCircle,LockKeyhole,Plus,RefreshCcw,Search,Settings2,ShieldCheck,SlidersHorizontal,Sparkles,Target,Trash2,TrendingDown,TrendingUp,Wallet,Wifi,X,XCircle} from 'lucide-react'
+import {Activity,ArrowDownRight,ArrowRight,ArrowUpRight,Bell,BellRing,Check,ChevronDown,Clock,Compass,Flame,Heart,History,Info,LoaderCircle,LockKeyhole,Menu,Plus,RefreshCcw,Search,Settings2,ShieldCheck,SlidersHorizontal,Sparkles,Target,Trash2,TrendingDown,TrendingUp,Wallet,Wifi,X,XCircle} from 'lucide-react'
 import {changeFavorite,changeWatch,createAlert,deleteAlert,getAlerts,getAnalysis,getCandles,getFavorites,getHistory,getMarkets,getMe,getSparklines,getTickers,getWatches,isTelegram,saveSettings} from './api'
 import {MarketChart,Sparkline} from './chart'
 import {AutoFeed} from './AutoFeed'
@@ -16,6 +16,8 @@ import './style.css'
 const popular=['BTC-USDT','ETH-USDT','SOL-USDT','XRP-USDT','BNB-USDT','DOGE-USDT','ADA-USDT','AVAX-USDT']
 const intervals:Timeframe[]=['1m','5m','15m','30m','1h','4h','1d']
 const tabs:{id:Tab,label:string,icon:typeof Compass}[]=[{id:'home',label:'Обзор',icon:Compass},{id:'terminal',label:'Терминал',icon:Activity},{id:'paper',label:'Демо-торговля',icon:Wallet},{id:'trades',label:'История сделок',icon:History},{id:'history',label:'Мои анализы',icon:Clock},{id:'alerts',label:'Уведомления',icon:Bell},{id:'auto',label:'AI Сигналы',icon:Sparkles},{id:'pump',label:'PUMP/DUMP',icon:Flame},{id:'settings',label:'Настройки',icon:Settings2}]
+const mobileTabs:Tab[]=['home','terminal','auto','paper']
+const extraTabs=tabs.filter(t=>!mobileTabs.includes(t.id))
 const number=(v:number|null|undefined,digits=4)=>v==null?'—':new Intl.NumberFormat('en-US',{maximumFractionDigits:digits}).format(v)
 const price=(v:number|null|undefined)=>v==null?'—':'$'+number(v,v>100?2:v>1?4:8)
 const usd=(v:number|null|undefined)=>v==null?'—':v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(2)+'M':v>=1e3?'$'+(v/1e3).toFixed(2)+'K':'$'+number(v,2)
@@ -30,7 +32,8 @@ function mergeHistory(base:Candle[],incoming:Candle[]):Candle[]{
 }
 
 function App(){
- const [tab,setTab]=useState<Tab>(()=>/^([A-Z0-9]{2,18})-USDT$/.test(new URLSearchParams(window.location.search).get('symbol')||'')?'terminal':'home')
+ const [tab,setTab]=useState<Tab>(()=>{const query=new URLSearchParams(window.location.search);const view=query.get('view');if(view&&tabs.some(t=>t.id===view))return view as Tab;return /^([A-Z0-9]{2,18})-USDT$/.test(query.get('symbol')||'')?'terminal':'home'})
+ const [moreOpen,setMoreOpen]=useState(false)
  const [allSymbols,setAllSymbols]=useState<string[]>([])
  const [tickers,setTickers]=useState<Ticker[]>([])
  const [livePrice,setLivePrice]=useState<{symbol:string,price:number}|null>(null)
@@ -125,11 +128,11 @@ function App(){
    <div className="sidebar-bottom"><div className="terminal-status"><span className="status-light"/> Режим анализа <small>READ ONLY</small></div><div className="sidebar-footnote">Данные BingX · Без исполнения ордеров</div></div>
   </aside>
   <main className="main">
-   <div className="topbar"><div className="topbar-left"><span className="crumb">WORKSPACE</span><span className="slash">/</span><strong>{tabs.find(t=>t.id===tab)?.label}</strong></div><div className="topbar-right"><span className="live-pill"><span className="status-light"/>{error?'API ERROR':'BINGX DATA'}</span><span className="build-label">v1.4.0</span><button className="circle-btn" aria-label="Обновить" onClick={()=>void loadMarket()}><RefreshCcw size={17}/></button><div className="user-avatar">{authorized?'TG':'G'}</div></div></div>
+   <div className="topbar"><div className="topbar-left"><span className="crumb">WORKSPACE</span><span className="slash">/</span><strong>{tabs.find(t=>t.id===tab)?.label}</strong></div><div className="topbar-right"><span className="live-pill"><span className="status-light"/>{error?'API ERROR':'BINGX DATA'}</span><span className="build-label">v1.4.1</span><button className="circle-btn" aria-label="Обновить" onClick={()=>void loadMarket()}><RefreshCcw size={17}/></button><div className="user-avatar">{authorized?'TG':'G'}</div></div></div>
    <div className="main-inner">
     <AnimatePresence mode="wait"><motion.div key={tab} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:0.18}}>
     {tab==='home'&&<>
-      <div className="hero"><div className="hero-glow"/><div className="eyebrow"><Sparkles size={14}/> INTELLIGENT MARKET ANALYSIS</div><h1>Рынок под контролем.<br/><span>Решения на основе данных.</span></h1><p>Технические сценарии для криптовалют BingX. Индикаторы, уровни и прозрачные аргументы без догадок.</p><button className="primary-btn" onClick={()=>setTab('terminal')}>Открыть терминал <ArrowRight size={17}/></button><div className="hero-ornament"><Activity size={170} strokeWidth={0.45}/></div></div>
+      <div className="hero"><div className="hero-glow"/><div className="eyebrow"><Sparkles size={14}/> INTELLIGENT MARKET ANALYSIS</div><h1>Рынок под контролем.<br/><span>Решения на основе данных.</span></h1><p>Технические сценарии для криптовалют BingX. Индикаторы, уровни и прозрачные аргументы без догадок.</p><div className="hero-actions"><button className="primary-btn" onClick={()=>setTab('terminal')}>Открыть терминал <ArrowRight size={17}/></button><button className="hero-demo-button" onClick={()=>setTab('paper')}><Wallet size={17}/> Демо-торговля</button></div><div className="hero-ornament"><Activity size={170} strokeWidth={0.45}/></div></div>
       <div className="section-header"><div><h2>Обзор рынка</h2><p>Актуальные бессрочные пары · BingX</p></div><div className="detail-count">{tickers.length} инструментов</div></div>
       <div className="metrics-row"><div className="stat-card"><div className="stat-label"><Activity size={15}/> ДОСТУПНЫЕ ПАРЫ</div><div className="stat-big">{allSymbols.length||'—'}</div><div className="stat-sub">Из каталога BingX</div></div><div className="stat-card"><div className="stat-label"><TrendingUp size={15}/> РОСТ ЗА 24 ЧАСА</div><div className="stat-big positive">{tickers.length?tickers.filter(t=>t.change24h>0).length:'—'}</div><div className="stat-sub">Среди загруженных пар</div></div><div className="stat-card"><div className="stat-label"><TrendingDown size={15}/> СНИЖЕНИЕ ЗА 24 ЧАСА</div><div className="stat-big negative">{tickers.length?tickers.filter(t=>t.change24h<0).length:'—'}</div><div className="stat-sub">Среди загруженных пар</div></div></div>
       <div className="section-header markets-heading"><div><h2>Криптовалюты</h2><p>Выберите монету для подробного анализа</p></div><div className="search-inline"><Search size={17}/><input placeholder="Поиск BTC, ETH, SOL..." value={search} onChange={e=>setSearch(e.target.value)}/>{search&&<button className="icon-plain" onClick={()=>setSearch('')}><X size={15}/></button>}</div></div>
@@ -165,7 +168,8 @@ function App(){
     </motion.div></AnimatePresence>
    </div>
   </main>
-  <nav className="bottom-nav">{tabs.map(t=><button key={t.id} className={tab===t.id?'active':''} onClick={()=>setTab(t.id)}><t.icon size={21}/><span>{t.id==='alerts'?'Алерты':t.id==='settings'?'Опции':t.id==='auto'?'AI':t.id==='paper'?'Демо':t.id==='trades'?'Сделки':t.id==='history'?'Мои':t.label}</span></button>)}</nav>
+  <nav className="bottom-nav" aria-label="Основная навигация">{mobileTabs.map(id=>{const t=tabs.find(t=>t.id===id)!;return <button key={t.id} aria-label={t.label} className={tab===t.id?'active':''} onClick={()=>{setMoreOpen(false);setTab(t.id)}}><t.icon size={21}/><span>{id==='home'?'Обзор':id==='terminal'?'График':id==='auto'?'Сигналы':'Демо'}</span></button>})}<button aria-label="Открыть остальные разделы" aria-expanded={moreOpen} className={moreOpen||!mobileTabs.includes(tab)?'active':''} onClick={()=>setMoreOpen(v=>!v)}><Menu size={21}/><span>Ещё</span></button></nav>
+  {moreOpen&&<><button className="more-nav-scrim" aria-label="Закрыть дополнительные разделы" onClick={()=>setMoreOpen(false)}/><nav className="more-nav-sheet" aria-label="Дополнительные разделы"><div className="more-nav-title">Все разделы</div>{extraTabs.map(t=><button key={t.id} className={'more-nav-link '+(tab===t.id?'active':'')} onClick={()=>{setMoreOpen(false);setTab(t.id)}}><t.icon size={18}/>{t.label}<ArrowRight size={15}/></button>)}</nav></>}
   <AnimatePresence>{searchOpen&&<motion.div className="modal-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onClick={()=>setSearchOpen(false)}><motion.div className="search-modal" initial={{y:20,scale:.97}} animate={{y:0,scale:1}} exit={{y:10,opacity:0}} onClick={e=>e.stopPropagation()}><div className="search-modal-head"><strong>Выбрать криптовалюту</strong><button className="circle-btn" onClick={()=>setSearchOpen(false)}><X size={18}/></button></div><div className="search-modal-input"><Search size={20}/><input autoFocus placeholder="Начните вводить, например BTC..." value={search} onChange={e=>setSearch(e.target.value)}/></div><div className="search-results">{filtered.slice(0,50).map(s=><button key={s} onClick={()=>choose(s)}><CoinLogo symbol={s} small/><div><strong>{s.replace('-',' / ')}</strong><small>BingX Perpetual</small></div><span>{price(tickMap[s]?.lastPrice)}</span><ArrowRight size={15}/></button>)}{filtered.length===0&&<div className="empty-text">Пары не найдены</div>}</div></motion.div></motion.div>}</AnimatePresence>
   <AnimatePresence>{toast&&<motion.div className="toast" initial={{opacity:0,y:15}} animate={{opacity:1,y:0}} exit={{opacity:0,y:12}}><Info size={16}/>{toast}<button onClick={()=>setToast('')}><X size={14}/></button></motion.div>}</AnimatePresence>
   {error&&tab==='home'&&<div className="error-banner"><Wifi size={16}/> {error} <button onClick={()=>void loadMarket()}>Повторить</button></div>}

@@ -604,7 +604,7 @@ ROOT = Path(__file__).resolve().parents[2] / 'frontend' / 'dist'
 async def index():
     index_file = ROOT / 'index.html'
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers={'Cache-Control': 'no-store, max-age=0'})
     return {'message': 'Frontend not built. See README.md. API works on /api/health.'}
 
 
@@ -617,5 +617,5 @@ async def serve_frontend(path: str):
         return FileResponse(target)
     index_file = ROOT / 'index.html'
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers={'Cache-Control': 'no-store, max-age=0'})
     raise HTTPException(404)

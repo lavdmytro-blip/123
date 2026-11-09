@@ -182,3 +182,22 @@
 .paper-error{display:flex;align-items:center;gap:9px;padding:12px;border:1px solid rgba(239,87,111,.3);border-radius:9px;color:#f06f88;font-size:12px}.paper-disclaimer{display:flex;align-items:flex-start;gap:9px;line-height:1.6}
 @media(max-width:850px){.paper-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.paper-position-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.paper-summary{grid-template-columns:1fr}.paper-settings,.paper-position{padding:14px}.paper-position-head{align-items:flex-start}.paper-levels span{flex:1 1 auto}.paper-fills>div{grid-template-columns:60px 1fr auto}.paper-position-foot>div{width:100%}}
+
+/* v1.4.1: put Demo in the fixed mobile toolbar, and group secondary views under More. */
+.hero-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;position:relative;z-index:2}
+.hero-demo-button{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:rgba(163,131,255,.08);color:#ddd4ff;border:1px solid rgba(180,154,255,.46);padding:14px 17px;border-radius:11px;font-weight:800;font-size:12px;min-height:46px}
+.hero-demo-button:hover{background:rgba(163,131,255,.17)}
+.more-nav-scrim,.more-nav-sheet{display:none}
+@media(max-width:720px){
+  .bottom-nav{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;overflow:visible!important;gap:0;z-index:25}
+  .bottom-nav button{flex:unset!important;min-width:0!important;font-size:10px!important;gap:5px!important;overflow:visible!important}
+  .bottom-nav button span{font-size:10px!important;white-space:nowrap!important}
+  .more-nav-scrim{display:block;position:fixed;inset:0;z-index:23;border:0;background:rgba(0,0,0,.60)}
+  .more-nav-sheet{display:flex;position:fixed;bottom:calc(68px + env(safe-area-inset-bottom,0px));left:10px;right:10px;z-index:24;flex-direction:column;gap:3px;padding:13px;border-radius:16px;background:#17192a;border:1px solid #46405c;box-shadow:0 16px 48px #0009;max-height:min(65vh,410px);overflow-y:auto}
+  .more-nav-title{font-size:11px;letter-spacing:.06em;color:#a39cbf;font-weight:800;padding:7px 12px}
+  .more-nav-link{display:flex;gap:12px;align-items:center;width:100%;border:0;border-radius:9px;padding:12px;color:#ddd8f4;background:transparent;text-align:left;font-weight:700}
+  .more-nav-link>svg:last-child{margin-left:auto;color:#77718f}
+  .more-nav-link.active{background:#6b52be33;color:#bfa8ff}
+  .hero-actions{align-items:stretch}
+  .hero-demo-button{flex:1 1 150px}
+}
