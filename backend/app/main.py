@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import logging
 import math
@@ -9,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from . import config, db, telegram, worker, logos, market_moves, market_filter
 from .analysis import analyze
 from .ai import ai_comment
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI):
     await market.close()
 
 
-app = FastAPI(title='BingX AI Signals', version='1.3.2', lifespan=lifespan,
+app = FastAPI(title='BingX AI Signals', version='1.3.3', lifespan=lifespan,
               docs_url=None, redoc_url=None)
 
 
@@ -197,6 +198,80 @@ async def auto_signals(user_id: int | None = Depends(optional_user)):
             'updatedAt': __import__('time').time_ns() // 1_000_000,
             'subscribed': subscribed, 'scannerEnabled': config.ENABLE_WORKER and config.AUTO_SIGNALS_ENABLED,
             'scanner': scanner, 'topSymbols': list(worker.POPULAR_MARKETS)}
+
+
+# Archive is intentionally independent from the balanced market filter. Old outcomes
+# remain available for auditing, including delisted and now-excluded symbols.
+AUTO_HISTORY_STATES = {'ALL', 'ACTIVE', 'TP3', 'STOP', 'AMBIGUOUS', 'STALE', 'EXPIRED'}
+
+
+@app.get('/api/auto-history')
+async def auto_history(page: int = 1, page_size: int = 20, outcome: str = 'COMPLETED',
+                       side: str = 'ALL', symbol: str = '', date_from: str = '', date_to: str = ''):
+    """All persisted paper scenarios, paged and searchable (not actual executed orders)."""
+    if not (1 <= page <= 100_000 and 1 <= page_size <= 50):
+        raise HTTPException(422, 'Недопустимый размер страницы')
+    outcome, side = outcome.upper(), side.upper()
+    if outcome not in AUTO_HISTORY_STATES | {'COMPLETED'} or side not in {'ALL', 'LONG', 'SHORT'}:
+        raise HTTPException(400, 'Недопустимый фильтр истории')
+    sym = symbol.strip().upper().replace('/', '-').replace(' ', '')
+    if len(sym) > 30 or (sym and not sym.replace('-', '').isalnum()):
+        raise HTTPException(400, 'Неверный поиск монеты')
+    try:
+        start = dt.date.fromisoformat(date_from) if date_from else None
+        end = dt.date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        raise HTTPException(400, 'Дата должна быть YYYY-MM-DD')
+    if start and end and start > end:
+        raise HTTPException(400, 'Дата начала позже даты окончания')
+
+    conditions = []
+    if outcome == 'COMPLETED':
+        conditions.append(db.AutoSignal.status != 'ACTIVE')
+    elif outcome != 'ALL':
+        conditions.append(db.AutoSignal.status == outcome)
+    if side != 'ALL':
+        conditions.append(db.AutoSignal.side == side)
+    if sym:
+        conditions.append(db.AutoSignal.symbol.contains(sym))
+    if start:
+        conditions.append(db.AutoSignal.created_at >= dt.datetime.combine(start, dt.time.min, dt.timezone.utc))
+    if end:
+        conditions.append(db.AutoSignal.created_at < dt.datetime.combine(end + dt.timedelta(days=1), dt.time.min, dt.timezone.utc))
+    with db.Session() as session:
+        query = select(db.AutoSignal).where(*conditions)
+        total = session.scalar(select(func.count()).select_from(db.AutoSignal).where(*conditions)) or 0
+        records = session.scalars(query.order_by(db.AutoSignal.id.desc()).offset((page-1)*page_size).limit(page_size)).all()
+        counts = dict(session.execute(select(db.AutoSignal.status, func.count()).group_by(db.AutoSignal.status)).all())
+        tp1 = session.scalar(select(func.count()).select_from(db.AutoSignal).where(db.AutoSignal.tp_reached >= 1)) or 0
+        tp2 = session.scalar(select(func.count()).select_from(db.AutoSignal).where(db.AutoSignal.tp_reached >= 2)) or 0
+        outputs = []
+        for s in records:
+            row = db.auto_signal_out(s)
+            terminal = s.status != 'ACTIVE'
+            legacy_finish = (dt.datetime.fromtimestamp((s.last_checked + 60_000)/1000, dt.timezone.utc)
+                             if terminal and s.last_checked and s.status in ('STOP','TP3','AMBIGUOUS') else None)
+            closed_at = s.finished_at or legacy_finish
+            row['createdAt'] = s.created_at.replace(tzinfo=dt.timezone.utc).isoformat() if s.created_at.tzinfo is None else s.created_at.isoformat()
+            row['finishedAt'] = (closed_at.replace(tzinfo=dt.timezone.utc).isoformat() if closed_at.tzinfo is None else closed_at.isoformat()) if closed_at else None
+            row['finishedAtSource'] = ('recorded' if s.finished_at else 'last_checked_candle' if legacy_finish else 'unknown')
+            # Hypothetical full-position movement to the terminating price level;
+            # partial take-profit allocation/fees/slippage are unspecified.
+            last_level = s.tp3 if s.status == 'TP3' else s.stop if s.status == 'STOP' else None
+            row['terminalLevel'] = last_level
+            row['terminalMovePercent'] = (round(100 * ((last_level / s.entry - 1) * (1 if s.side == 'LONG' else -1)), 3)
+                                           if last_level and s.entry and s.entry > 0 else None)
+            outputs.append(row)
+    total_known = counts.get('TP3', 0) + counts.get('STOP', 0)
+    return {'items': outputs, 'page': page, 'pageSize': page_size, 'total': total,
+            'hasMore': page * page_size < total,
+            'stats': {'total': sum(counts.values()), 'active': counts.get('ACTIVE', 0),
+                      'tp1Reached': tp1, 'tp2Reached': tp2,
+                      'tp3': counts.get('TP3', 0), 'stop': counts.get('STOP', 0),
+                      'ambiguous': counts.get('AMBIGUOUS', 0), 'stale': counts.get('STALE', 0),
+                      'expired': counts.get('EXPIRED', 0), 'knownOutcomes': total_known,
+                      'tp3ShareOfKnownPercent': round(100 * counts.get('TP3', 0) / total_known, 1) if total_known else None},
+            'disclaimer': 'Historical simulated scenarios; NOT executed trades. No assumed position size, leverage, fees or fills.'}
 
 
 class AutoSubscriptionBody(BaseModel):

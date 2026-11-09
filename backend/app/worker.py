@@ -326,21 +326,25 @@ async def update_auto_signals(market):
                 needed = max(((created + 59999) // 60000) * 60000, sig.last_checked + 60000 if sig.last_checked else 0)
                 if closed and closed[0]['time'] > needed + 60_000:
                     sig.status = 'STALE'
+                    sig.finished_at = db.now()
                     continue
                 for candle in closed:
                     if candle['time'] < created or candle['time'] <= sig.last_checked:
                         continue
                     if sig.last_checked and candle['time'] > sig.last_checked + 60_000:
                         sig.status = 'STALE'
+                        sig.finished_at = db.now()
                         break
                     status, reached = _status_at_candle(sig, candle)
                     sig.tp_reached = reached
                     sig.last_checked = candle['time']
                     if status:
                         sig.status = status
+                        sig.finished_at = dt.datetime.fromtimestamp((candle['time'] + 60_000) / 1000, dt.timezone.utc)
                         break
                 if sig.status == 'ACTIVE' and now_ms - created > 24 * 3600_000:
                     sig.status = 'EXPIRED'
+                    sig.finished_at = db.now()
                 # Preserve exactly one notification per new milestone after persistence.
                 if sig.status != 'ACTIVE' or sig.tp_reached:
                     previous = next((x for x in active if x.id == item_id), None)

@@ -35,3 +35,8 @@ export const autoSubscribe=(enabled:boolean)=>api<{enabled:boolean}>('/api/auto-
 
 export const getPumpFeed=()=>api<import('./types').PumpFeedResponse>('/api/pump-events')
 export const pumpSubscribe=(enabled:boolean)=>api<{enabled:boolean}>('/api/pump-subscription',{method:'POST',body:JSON.stringify({enabled})})
+
+export function getAutoHistory(filters:{page:number;pageSize:number;outcome:import('./types').HistoryOutcome;side:'ALL'|'LONG'|'SHORT';symbol:string;dateFrom:string;dateTo:string}){
+ const params=new URLSearchParams({page:String(filters.page),page_size:String(filters.pageSize),outcome:filters.outcome,side:filters.side,symbol:filters.symbol,date_from:filters.dateFrom,date_to:filters.dateTo})
+ return api<import('./types').AutoHistoryResponse>('/api/auto-history?'+params.toString())
+}

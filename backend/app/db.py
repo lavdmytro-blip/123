@@ -1,6 +1,6 @@
 """Persisted history, favorites, settings, watches and alerts."""
 import datetime as dt
-from sqlalchemy import create_engine, ForeignKey, Integer, BigInteger, Float, String, DateTime, Boolean, Text, UniqueConstraint
+from sqlalchemy import create_engine, ForeignKey, Integer, BigInteger, Float, String, DateTime, Boolean, Text, UniqueConstraint, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from . import config
 
@@ -74,6 +74,7 @@ class AutoSignal(Base):
     tp_reached: Mapped[int] = mapped_column(Integer, default=0)
     last_checked: Mapped[int] = mapped_column(BigInteger, default=0)
     candle_time: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (UniqueConstraint('symbol', 'interval', 'candle_time'),)
@@ -142,6 +143,17 @@ class Watch(Base):
 
 
 def init_db():
+    # Upgrade previous Railway PostgreSQL databases without dropping saved records.
+    # Existing rows retain NULL; the API can show a last-candle estimate for old outcomes.
+    inspector = inspect(engine)
+    if 'auto_signals' in inspector.get_table_names():
+        columns = {c['name'] for c in inspector.get_columns('auto_signals')}
+        if 'finished_at' not in columns:
+            with engine.begin() as conn:
+                if engine.dialect.name == 'postgresql':
+                    conn.execute(text('ALTER TABLE auto_signals ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ'))
+                else:
+                    conn.execute(text('ALTER TABLE auto_signals ADD COLUMN finished_at DATETIME'))
     Base.metadata.create_all(engine)
 
 
