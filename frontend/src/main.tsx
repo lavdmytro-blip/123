@@ -128,7 +128,7 @@ function App(){
    <div className="sidebar-bottom"><div className="terminal-status"><span className="status-light"/> Режим анализа <small>READ ONLY</small></div><div className="sidebar-footnote">Данные BingX · Без исполнения ордеров</div></div>
   </aside>
   <main className="main">
-   <div className="topbar"><div className="topbar-left"><span className="crumb">WORKSPACE</span><span className="slash">/</span><strong>{tabs.find(t=>t.id===tab)?.label}</strong></div><div className="topbar-right"><span className="live-pill"><span className="status-light"/>{error?'API ERROR':'BINGX DATA'}</span><span className="build-label">v1.4.1</span><button className="circle-btn" aria-label="Обновить" onClick={()=>void loadMarket()}><RefreshCcw size={17}/></button><div className="user-avatar">{authorized?'TG':'G'}</div></div></div>
+   <div className="topbar"><div className="topbar-left"><span className="crumb">WORKSPACE</span><span className="slash">/</span><strong>{tabs.find(t=>t.id===tab)?.label}</strong></div><div className="topbar-right"><span className="live-pill"><span className="status-light"/>{error?'API ERROR':'BINGX DATA'}</span><span className="build-label">v1.4.2</span><button className="circle-btn" aria-label="Обновить" onClick={()=>void loadMarket()}><RefreshCcw size={17}/></button><div className="user-avatar">{authorized?'TG':'G'}</div></div></div>
    <div className="main-inner">
     <AnimatePresence mode="wait"><motion.div key={tab} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-8}} transition={{duration:0.18}}>
     {tab==='home'&&<>

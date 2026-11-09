@@ -1,8 +1,8 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,AlertCircle,Clock,Coins,ExternalLink,Info,Pause,Play,RefreshCcw,RotateCcw,ShieldCheck,Wallet} from 'lucide-react'
-import {closePaperPosition,getPaperAccount,resetPaper,setPaperEnabled} from './api'
+import {closePaperPosition,getAutoFeed,getPaperAccount,resetPaper,setPaperEnabled} from './api'
 import {CoinLogo} from './CoinLogo'
-import type {PaperAccountResponse,PaperPosition} from './types'
+import type {AutoFeedResponse,PaperAccountResponse,PaperPosition} from './types'
 
 const money=(v:number|null|undefined,d=2)=>v==null||!Number.isFinite(v)?'—':new Intl.NumberFormat('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}).format(v)
 const rate=(v:number)=>new Intl.NumberFormat('en-US',{maximumSignificantDigits:8}).format(v)
@@ -11,13 +11,20 @@ const statusLabel=(s:string)=>({OPEN:'В работе',TP3:'Все TP',STOP:'С�
 
 export function PaperTrading({authorized,onOpen}:{authorized:boolean;onOpen:(symbol:string)=>void}){
  const [data,setData]=useState<PaperAccountResponse|null>(null)
+ const [autoFeed,setAutoFeed]=useState<AutoFeedResponse|null>(null)
+ const [scanError,setScanError]=useState('')
  const [loading,setLoading]=useState(true)
  const [busy,setBusy]=useState(false)
  const [error,setError]=useState('')
  const [view,setView]=useState<'open'|'closed'>('open')
  const reload=useCallback(async()=>{
-  try{const d=await getPaperAccount();setData(d);setError('')}
-  catch(e){setError((e as Error).message)}finally{setLoading(false)}
+  // Scanner diagnostics are independent: a public-market outage must not hide the personal ledger.
+  const [accountResult,scanResult]=await Promise.allSettled([getPaperAccount(),getAutoFeed()])
+  if(accountResult.status==='fulfilled'){setData(accountResult.value);setError('')}
+  else setError((accountResult.reason as Error)?.message||'Не удалось загрузить демо-счёт')
+  if(scanResult.status==='fulfilled'){setAutoFeed(scanResult.value);setScanError('')}
+  else setScanError((scanResult.reason as Error)?.message||'Сканер недоступен')
+  setLoading(false)
  },[])
  useEffect(()=>{if(!authorized){setLoading(false);return}
   void reload();const timer=window.setInterval(()=>void reload(),20000)
@@ -51,6 +58,31 @@ export function PaperTrading({authorized,onOpen}:{authorized:boolean;onOpen:(sym
    <div className="paper-actions"><button className={data?.enabled?'outline-btn':'primary-btn'} onClick={()=>void toggle()} disabled={busy}>{data?.enabled?<><Pause size={16}/> Отключить новые входы</>:<><Play size={16}/> Включить демо-торговлю</>}</button>
     <button className="outline-btn" disabled={busy||data?.enabled||active.length>0} onClick={()=>void reset()}><RotateCcw size={15}/> Сбросить демо-счёт</button></div>
    <p className="tiny-info">Выключение останавливает только новые виртуальные входы. Уже открытые позиции продолжают отслеживаться. Сброс удаляет историю и возможен только после выключения и закрытия всех позиций.</p>
+  </div>
+  <div className="panel paper-diagnostics">
+   <div className="paper-settings-head"><div><h2><Activity size={19}/> Почему нет демо-позиций?</h2><p>Демо-счёт не открывает позицию при включении. Он ждёт НОВЫЙ автосигнал, который прошёл проверки.</p></div><button className="outline-btn" onClick={()=>void reload()} disabled={busy}><RefreshCcw size={15}/> Проверить</button></div>
+   <div className="paper-diag-grid">
+    <div><small>Демо-счёт</small><strong>{data.enabled?'Включён':'Выключен'}</strong></div>
+    <div><small>Автосканер</small><strong>{!autoFeed?'Неизвестно':autoFeed.scannerEnabled?'Включён':'Выключен'}</strong></div>
+    <div><small>Допущено пар</small><strong>{autoFeed?.marketFilter?.eligible??'—'}</strong></div>
+    <div><small>Проверено за проход</small><strong>{autoFeed?`${autoFeed.scanner.scanned} / ${autoFeed.scanner.total}`:'—'}</strong></div>
+    <div><small>Сценариев в текущей ленте</small><strong>{autoFeed?.signals.length??'—'}</strong></div>
+    <div><small>Время последнего сканирования</small><strong>{autoFeed?.scanner.lastUpdate?time(autoFeed.scanner.lastUpdate):'—'}</strong></div>
+   </div>
+   <p className="paper-diag-hint">{
+    !data.enabled?'Сначала нажми «Включить демо-торговлю» выше.':
+    scanError?'Не удалось получить статус сканера: '+scanError:
+    !autoFeed?'Загружаем состояние автосканера.':
+    !autoFeed.scannerEnabled?'Фоновый сканер выключен. Проверь Railway Variables: ENABLE_WORKER=true и AUTO_SIGNALS_ENABLED=true.':
+    autoFeed.scanner.error?'Ошибка сканера: '+autoFeed.scanner.error:
+    (autoFeed.marketFilter?.eligible===0)?'Фильтр не допустил ни одной пары. Проверь /api/market-filter, особенно возраст листинга и quoteVolume.':
+    !autoFeed.scanner.lastUpdate?'Сканер ещё не начал первый проход или серверный worker не запущен.':
+    Date.now()-new Date(autoFeed.scanner.lastUpdate).getTime()>10*60_000?'Сканер давно не обновлялся: проверь Deploy Logs в Railway.':
+    autoFeed.signals.length===0?'В ленте ещё нет подходящих автосигналов. Условия анализа строгие — это не ошибка самого демо-счёта.':
+    data.stats.active===0?'В общей ленте уже есть сигналы, но демо учитывает только новые публикации после включения. Если новые сигналы появляются, а позиция нет — проверь Deploy Logs.':
+    'Автоматический демо-мониторинг активен.'
+   }</p>
+   <p className="tiny-info">Значения обновляются по кнопке или каждые 20 секунд. Сигналы, появившиеся до включения демо, не открываются задним числом. Здесь не создаются тестовые или реальные ордера.</p>
   </div>
   <div className="section-header"><div><h2>Позиции и отработка</h2><p>По закрытым 1-минутным свечам BingX, без реального исполнения ордеров</p></div><div className="segment"><button className={view==='open'?'selected':''} onClick={()=>setView('open')}>Активные ({active.length})</button><button className={view==='closed'?'selected':''} onClick={()=>setView('closed')}>История ({closed.length})</button></div></div>
   {(view==='open'?active:closed).length===0?<div className="panel paper-empty"><Clock size={32}/><h3>{view==='open'?'Открытых демо-позиций нет':'История пока пуста'}</h3><p>{view==='open'?'Включи демо-режим: при появлении следующего подходящего автосигнала бот смоделирует вход.':'Здесь будут результаты виртуального закрытия по TP, SL, истечению срока или вручную.'}</p></div>
