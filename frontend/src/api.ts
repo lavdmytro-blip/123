@@ -16,6 +16,7 @@ export async function api<T>(url:string, options:RequestInit={}):Promise<T> {
 }
 export const getMarkets=(search='')=>api<{symbols:string[],total:number}>('/api/markets?search='+encodeURIComponent(search))
 export const getTickers=()=>api<{tickers:Ticker[],updatedAt:number}>('/api/tickers')
+export const getCoinLogos=()=>api<{images:Record<string,string>,count:number}>('/api/coin-logos')
 export const getCandles=(symbol:string, interval:Timeframe)=>api<{candles:Candle[]}>('/api/candles?symbol='+encodeURIComponent(symbol)+'&interval='+interval)
 export const getSparklines=(symbols:string[])=>api<{sparklines:Record<string,number[]>}>('/api/sparklines?symbols='+encodeURIComponent(symbols.join(',')))
 export const getAnalysis=(symbol:string,interval:Timeframe)=>api<Signal>('/api/analyze',{method:'POST',body:JSON.stringify({symbol,interval,save:true})})
@@ -29,3 +30,5 @@ export const createAlert=(symbol:string,targetPrice:number)=>api<{ok:boolean}>('
 export const deleteAlert=(id:number)=>api<{ok:boolean}>('/api/alerts/'+id,{method:'DELETE'})
 export const getWatches=()=>api<{watches:Watch[]}>('/api/watches')
 export const changeWatch=(symbol:string,interval:Timeframe,active:boolean)=>api<{ok:boolean}>('/api/watches',{method:'POST',body:JSON.stringify({symbol,interval,active})})
+export const getAutoFeed=()=>api<import('./types').AutoFeedResponse>('/api/auto-signals')
+export const autoSubscribe=(enabled:boolean)=>api<{enabled:boolean}>('/api/auto-subscription',{method:'POST',body:JSON.stringify({enabled})})

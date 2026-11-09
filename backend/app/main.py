@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
-from . import config, db, telegram, worker
+from . import config, db, telegram, worker, logos
 from .analysis import analyze
 from .ai import ai_comment
 from .auth import optional_user, require_user
@@ -26,7 +26,12 @@ async def lifespan(app: FastAPI):
     db.init_db()
     await telegram.setup()
     task = asyncio.create_task(worker.loop(market)) if config.ENABLE_WORKER else None
+    scan_task = asyncio.create_task(worker.scanner_loop(market)) if config.ENABLE_WORKER and config.AUTO_SIGNALS_ENABLED else None
     yield
+    if scan_task:
+        scan_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scan_task
     if task:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -69,6 +74,14 @@ async def markets(search: str = ''):
     needle = search.upper().strip().replace('/', '-')[:25]
     matching = [s for s in items if needle in s]
     return {'symbols': matching[:2500], 'total': len(matching), 'updatedFrom': 'BingX'}
+
+
+@app.get('/api/coin-logos')
+async def coin_logos():
+    """Public, cached brand images; logo coverage varies by provider."""
+    mapping = await logos.get_logos()
+    return {'images': mapping, 'count': len(mapping), 'source': 'CoinGecko',
+            'fallback': 'cryptocurrency-icons'}
 
 
 @app.get('/api/tickers')
@@ -133,6 +146,48 @@ async def analysis(body: AnalyzeBody, user_id: int | None = Depends(optional_use
                             status='ACTIVE' if result['side'] != 'WAIT' else 'WAIT', result_json=json.dumps(result))
             session.add(rec)
     return result
+
+
+@app.get('/api/auto-signals')
+async def auto_signals(user_id: int | None = Depends(optional_user)):
+    """Public feed, with per-user opt-in flag (no private account data exposed)."""
+    with db.Session() as session:
+        rows = session.scalars(select(db.AutoSignal).order_by(db.AutoSignal.id.desc()).limit(80)).all()
+        sub = session.get(db.AutoSignalSubscription, user_id) if user_id else None
+        subscribed = bool(sub and sub.enabled)
+        state = session.get(db.ScannerState, 1)
+        scanner = {'total': state.total, 'scanned': state.scanned, 'round': state.round,
+                   'lastSymbol': state.last_symbol, 'lastUpdate': state.updated_at.isoformat() if state.updated_at else None,
+                   'lastCompleted': state.last_completed_at.isoformat() if state.last_completed_at else None,
+                   'error': state.error} if state else {'total': 0, 'scanned': 0, 'round': 0, 'lastSymbol': '', 'lastUpdate': None, 'lastCompleted': None, 'error': ''}
+        feed = [db.auto_signal_out(x) for x in rows]
+    try:
+        ticker_data = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}
+        live_prices = {row['symbol']: ticker_data[row['symbol']]['lastPrice'] for row in feed
+                       if row['symbol'] in ticker_data and ticker_data[row['symbol']]['lastPrice'] > 0}
+        prices_fresh = True
+    except MarketDataError:
+        live_prices, prices_fresh = {}, False
+    return {'signals': feed, 'prices': live_prices, 'pricesFresh': prices_fresh,
+            'updatedAt': __import__('time').time_ns() // 1_000_000,
+            'subscribed': subscribed, 'scannerEnabled': config.ENABLE_WORKER and config.AUTO_SIGNALS_ENABLED,
+            'scanner': scanner, 'topSymbols': list(worker.POPULAR_MARKETS)}
+
+
+class AutoSubscriptionBody(BaseModel):
+    enabled: bool
+
+
+@app.post('/api/auto-subscription')
+async def auto_subscription(body: AutoSubscriptionBody, user_id: int = Depends(require_user)):
+    with db.Session.begin() as session:
+        db.get_person(session, user_id)
+        sub = session.get(db.AutoSignalSubscription, user_id)
+        if not sub:
+            session.add(db.AutoSignalSubscription(user_id=user_id, enabled=body.enabled))
+        else:
+            sub.enabled = body.enabled
+    return {'enabled': body.enabled}
 
 
 @app.get('/api/me')

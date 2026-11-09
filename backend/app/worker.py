@@ -11,6 +11,7 @@ import time
 from sqlalchemy import select
 from . import db, telegram, config
 from .analysis import analyze
+from .ai import ai_comment
 from .bingx import normalize_ticker, MarketDataError
 
 log = logging.getLogger(__name__)
@@ -139,6 +140,202 @@ async def update_watches(market):
             session.commit()
 
 
+def _created_ms(item) -> int:
+    return int(item.created_at.replace(tzinfo=dt.timezone.utc).timestamp() * 1000) if item.created_at.tzinfo is None else int(item.created_at.timestamp() * 1000)
+
+
+POPULAR_MARKETS = ('BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'BNB-USDT', 'DOGE-USDT',
+                   'ADA-USDT', 'AVAX-USDT', 'TON-USDT', 'LINK-USDT', 'DOT-USDT', 'TRX-USDT')
+
+
+def ordered_universe(available: list[str], tickers: list[dict]) -> list[str]:
+    """One full rotation over every valid symbol; large/liquid assets are visited first."""
+    symbols = set(available)
+    if config.AUTO_SIGNALS_UNIVERSE == 'CUSTOM':
+        symbols.intersection_update(config.AUTO_SIGNALS_SYMBOLS)
+    scores = {t['symbol']: t.get('volume24h', 0) for t in tickers}
+    preferred = {v: i for i, v in enumerate(POPULAR_MARKETS)}
+    # Sort fixed top symbols first, then rest in volume order, then symbol for stability.
+    return sorted(symbols, key=lambda s: (0, preferred[s]) if s in preferred else
+                  (1, -scores.get(s, 0), s))
+
+
+def _set_scan_progress(*, total=None, scanned=None, last_symbol=None, completed=False, error=None):
+    with db.Session.begin() as session:
+        state = session.get(db.ScannerState, 1)
+        if not state:
+            state = db.ScannerState(id=1)
+            session.add(state)
+        if total is not None:
+            state.total = total
+        if scanned is not None:
+            state.scanned = scanned
+        if last_symbol is not None:
+            state.last_symbol = last_symbol
+        if error is not None:
+            state.error = str(error)[:200]
+        state.updated_at = db.now()
+        if completed:
+            state.round += 1
+            state.last_completed_at = db.now()
+
+
+async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int):
+    """Evaluate just-closed bars; return true only if a paper scenario was published."""
+    step_ms = config.INTERVALS[interval] * 1000
+    candles = await market.candles(symbol, interval)
+    closed = [c for c in candles if c['time'] + step_ms <= now_ms]
+    if len(closed) < 210:
+        return False
+    last_bar = closed[-1]['time']
+    # Do not publish old signals if the exchange has stopped sending fresh candles.
+    if now_ms - (last_bar + step_ms) > step_ms + 30_000:
+        return False
+    with db.Session() as session:
+        previous = session.scalars(select(db.AutoSignal).where(
+            db.AutoSignal.symbol == symbol, db.AutoSignal.interval == interval
+        ).order_by(db.AutoSignal.id.desc()).limit(1)).first()
+        if previous and (previous.candle_time == last_bar or
+                         (now_ms - _created_ms(previous) < 90 * 60_000) or
+                         previous.status == 'ACTIVE'):
+            return False
+    result = analyze(symbol, interval, closed, None, now_ms)
+    if result['side'] not in ('LONG', 'SHORT') or not result['takeProfits'] or result['entry'] is None:
+        return False
+    atr = result['metrics'].get('atr') or 0
+    # A stale entry area must never be shown as if it were currently attainable.
+    if not live or abs(live - result['entry']) > max(result['entry'] * 0.002, atr * 0.4):
+        return False
+    if config.OPENAI_API_KEY:
+        result['aiSummary'] = await ai_comment(result)
+    with db.Session.begin() as session:
+        sig = db.AutoSignal(symbol=symbol, interval=interval, side=result['side'],
+            entry=result['entry'], stop=result['stopLoss'],
+            tp1=result['takeProfits'][0], tp2=result['takeProfits'][1], tp3=result['takeProfits'][2],
+            candle_time=last_bar, result_json=json.dumps(result, ensure_ascii=False))
+        session.add(sig)
+        session.flush()
+        new_id = sig.id
+    log.info('Paper scenario #%s published for %s %s', new_id, symbol, interval)
+    with db.Session() as session:
+        subscribers = session.scalars(select(db.AutoSignalSubscription).where(
+            db.AutoSignalSubscription.enabled.is_(True)).limit(100)).all()
+        chats = []
+        for sub in subscribers:
+            person = session.get(db.Person, sub.user_id)
+            if person and person.chat_id and person.notifications:
+                chats.append(person.chat_id)
+    # Network sends should not block the market rotation for too long.
+    for chat_id in chats:
+        await telegram.send(chat_id, f'📡 Виртуальный сценарий {symbol} {interval}: {result["side"]}\n'
+            f'Entry {result["entry"]:.9g} · TP1 {result["takeProfits"][0]:.9g}'
+            f' · SL {result["stopLoss"]:.9g}\n'
+            'Аналитический сценарий, не реальная сделка. Проверяйте актуальность в Mini App.')
+    return True
+
+
+async def auto_scan(market, *, max_symbols: int | None = None):
+    """One sweep of the entire public USDT perpetual universe, in paced batches.
+
+    This runs independently of status tracking so an extended sweep never blocks
+    1-minute TP/SL updates. max_symbols is used only in offline tests.
+    """
+    if not config.AUTO_SIGNALS_ENABLED:
+        return 0
+    interval = config.AUTO_SIGNALS_INTERVAL
+    if interval not in config.INTERVALS:
+        log.error('Invalid auto scan interval %s', interval)
+        return 0
+    symbols = await market.symbols()
+    try:
+        quotes = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}
+    except MarketDataError:
+        quotes = {}
+    rotation = ordered_universe(symbols, list(quotes.values()))
+    total = len(rotation)
+    if max_symbols is not None:
+        rotation = rotation[:max_symbols]
+    _set_scan_progress(total=total, scanned=0, error='')
+    processed = 0
+    for i, symbol in enumerate(rotation, 1):
+        try:
+            now_ms = int(time.time() * 1000)
+            live = quotes.get(symbol, {}).get('lastPrice', 0)
+            await _scan_one(market, symbol, interval, live, now_ms)
+        except asyncio.CancelledError:
+            raise
+        except MarketDataError as exc:
+            log.warning('Scan of %s failed: %s', symbol, exc)
+        except Exception:
+            log.exception('Auto scan failed for %s', symbol)
+        processed = i
+        if i % config.AUTO_SCAN_BATCH_SIZE == 0 or i == len(rotation):
+            _set_scan_progress(scanned=i, last_symbol=symbol)
+            # Refresh price snapshot between batches, not for every coin.
+            try:
+                quotes = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}
+            except MarketDataError:
+                pass
+        if i < len(rotation):
+            await asyncio.sleep(config.AUTO_SCAN_PACE_SECONDS)
+    if max_symbols is None:
+        _set_scan_progress(scanned=total, completed=True)
+    return processed
+
+
+async def scanner_loop(market):
+    """Dedicated scanner; no async starvation of the notification/status loop."""
+    await asyncio.sleep(8)
+    while True:
+        try:
+            if config.AUTO_SIGNALS_ENABLED:
+                count = await auto_scan(market)
+                log.info('Completed all-market scan (%d symbols)', count)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception('All-market scan round failed')
+            _set_scan_progress(error=str(exc))
+        await asyncio.sleep(config.AUTO_SCAN_COOLDOWN_SECONDS)
+
+
+async def update_auto_signals(market):
+    now_ms = int(time.time() * 1000)
+    with db.Session() as session:
+        active = session.scalars(select(db.AutoSignal).where(db.AutoSignal.status == 'ACTIVE').limit(500)).all()
+        jobs = [(x.id, x.symbol, _created_ms(x)) for x in active]
+    for symbol in sorted({x[1] for x in jobs}):
+        try:
+            candles = await market.candles(symbol, '1m', 300)
+        except MarketDataError:
+            continue
+        closed = [c for c in candles if c['time'] + 60_000 <= now_ms]
+        with db.Session.begin() as session:
+            for item_id, _, created in (j for j in jobs if j[1] == symbol):
+                sig = session.get(db.AutoSignal, item_id)
+                if not sig or sig.status != 'ACTIVE':
+                    continue
+                # Missing minutes means we cannot reliably determine TP/SL order.
+                needed = max(((created + 59999) // 60000) * 60000, sig.last_checked + 60000 if sig.last_checked else 0)
+                if closed and closed[0]['time'] > needed + 60_000:
+                    sig.status = 'STALE'
+                    continue
+                for candle in closed:
+                    if candle['time'] < created or candle['time'] <= sig.last_checked:
+                        continue
+                    if sig.last_checked and candle['time'] > sig.last_checked + 60_000:
+                        sig.status = 'STALE'
+                        break
+                    status, reached = _status_at_candle(sig, candle)
+                    sig.tp_reached = reached
+                    sig.last_checked = candle['time']
+                    if status:
+                        sig.status = status
+                        break
+                if sig.status == 'ACTIVE' and now_ms - created > 24 * 3600_000:
+                    sig.status = 'EXPIRED'
+
+
 async def loop(market):
     cycles = 0
     await asyncio.sleep(15)
@@ -146,6 +343,8 @@ async def loop(market):
         try:
             await update_alerts(market)
             await update_signals(market)
+            if config.AUTO_SIGNALS_ENABLED:
+                await update_auto_signals(market)
             if cycles % 4 == 0:
                 await update_watches(market)
         except asyncio.CancelledError:

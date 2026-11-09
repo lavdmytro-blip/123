@@ -8,4 +8,7 @@ export interface SavedSignal {id:number;symbol:string;interval:Timeframe;side:Si
 export interface Alert {id:number;symbol:string;targetPrice:number;active:boolean}
 export interface Watch {symbol:string;interval:Timeframe;lastSide:Side}
 export interface Settings {userId:number;language:'ru'|'en';theme:'dark'|'light';interval:Timeframe;notifications:boolean;chatConnected:boolean}
-export type Tab = 'home'|'terminal'|'history'|'alerts'|'settings'
+export type Tab = 'home'|'terminal'|'auto'|'history'|'alerts'|'settings'
+export interface AutoSignal {id:number;symbol:string;interval:Timeframe;side:Side;entry:number;stopLoss:number;takeProfits:number[];status:string;tpReached:number;createdAt:string;result:Signal}
+export interface ScannerProgress {total:number;scanned:number;round:number;lastSymbol:string;lastUpdate:string|null;lastCompleted:string|null;error:string}
+export interface AutoFeedResponse {scanner:ScannerProgress;topSymbols:string[];signals:AutoSignal[];prices:Record<string,number>;pricesFresh:boolean;updatedAt:number;subscribed:boolean;scannerEnabled:boolean}
