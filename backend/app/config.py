@@ -24,6 +24,15 @@ AUTO_SCAN_BATCH_SIZE = max(1, min(int(os.getenv('AUTO_SCAN_BATCH_SIZE', '12')), 
 AUTO_SCAN_PACE_SECONDS = max(0.25, min(float(os.getenv('AUTO_SCAN_PACE_SECONDS', '1.2')), 10.0))
 AUTO_SCAN_COOLDOWN_SECONDS = max(5, min(int(os.getenv('AUTO_SCAN_COOLDOWN_SECONDS', '60')), 900))
 
+# v1.3.2: conservative automatic-signal universe (Railway environment overrides).
+# The legacy AUTO_SIGNALS_UNIVERSE=ALL still respects this eligibility filter.
+MARKET_FILTER_MODE = os.getenv('MARKET_FILTER_MODE', 'balanced').strip().lower()
+if MARKET_FILTER_MODE != 'balanced':
+    MARKET_FILTER_MODE = 'balanced'  # Only the verified preset is currently supported.
+MARKET_MIN_24H_USDT = max(0, float(os.getenv('MARKET_MIN_24H_USDT', '10000000')))
+MARKET_MIN_LISTING_DAYS = max(0, int(os.getenv('MARKET_MIN_LISTING_DAYS', '30')))
+MARKET_EXCLUDE_NONSTANDARD = os.getenv('MARKET_EXCLUDE_NONSTANDARD', 'true').strip().lower() == 'true'
+
 # Read-only rapid-move detector. Observes all tickers in one request per poll.
 PUMP_MONITOR_ENABLED = os.getenv('PUMP_MONITOR_ENABLED', 'true').lower() == 'true'
 PUMP_POLL_SECONDS = max(15, min(int(os.getenv('PUMP_POLL_SECONDS', '20')), 180))

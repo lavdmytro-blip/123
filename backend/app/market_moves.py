@@ -11,7 +11,7 @@ import logging
 import math
 import time
 from sqlalchemy import select, delete
-from . import config, db, telegram
+from . import config, db, telegram, market_filter
 from .bingx import MarketDataError, normalize_ticker
 
 logger = logging.getLogger(__name__)
@@ -62,16 +62,30 @@ class MoveMonitor:
         self.last_error: str = ''
         self.started_at = time.time()
         self.observed = 0
+        self.available = 0
+        self.eligible_symbols: set[str] = set()
+        self.filter_report = market_filter.filter_settings()
 
     async def run_once(self, market, now: float | None = None) -> int:
         now = time.time() if now is None else now
-        rows = [normalize_ticker(x) for x in await market.ticker()]
+        # Shared balanced filters for the pump monitor and automatic scanner.
+        # Refresh contract metadata from the BingX public endpoint (cached 30m).
+        contracts = await market.contracts()
+        raw_tickers = await market.ticker()
+        allowed, report = market_filter.eligible_markets(contracts, raw_tickers, int(now * 1000))
+        self.eligible_symbols = allowed
+        self.filter_report = report
+        rows = [normalize_ticker(x) for x in raw_tickers]
+        self.available = len(rows)
+        # Purge observed samples for instruments that no longer qualify.
+        for stale in self.history.keys() - allowed:
+            del self.history[stale]
         processed = 0
         candidates = []
         # Snapshot ticker pricing for every active USDT pair with *one* public request.
         for tick in rows:
             symbol, price, volume24 = tick['symbol'], tick['lastPrice'], tick['volume24h']
-            if not symbol.endswith('-USDT') or not price or not math.isfinite(price):
+            if symbol not in allowed or not price or not math.isfinite(price):
                 continue
             processed += 1
             samples = self.history.setdefault(symbol, deque())

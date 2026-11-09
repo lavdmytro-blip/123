@@ -98,3 +98,22 @@
 .pump-metrics b{display:block;font-size:13px;overflow-wrap:anywhere}
 .pump-chart-link{align-self:stretch;justify-content:center}
 @media(max-width:720px){.pump-toolbar{flex-direction:column;align-items:stretch}.pump-toolbar .auto-sub{width:100%;justify-content:center}.pump-metrics b{font-size:11px}.pump-item{padding:15px}.signal-hub-tabs button{font-size:11px}}
+
+/* v1.3.1: PUMP/DUMP has its own visible navigation destination on desktop and mobile. */
+.build-label{font-size:10px;color:var(--muted2);font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:720px){
+  .bottom-nav{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .bottom-nav button{min-width:0;overflow:hidden;gap:4px;font-size:9px}
+  .bottom-nav button span{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+  .bottom-nav button svg{height:19px;width:19px;flex:none}
+  .build-label{font-size:9px}
+}
+@media (max-width:390px){
+  .bottom-nav button{font-size:8px}
+  .bottom-nav button svg{height:18px;width:18px}
+}
+
+/* v1.3.2: eligibility preset visible on both automatic feeds. */
+.balanced-notice{display:flex;align-items:center;gap:10px;padding:12px 16px;color:#b9d5d0;font-size:12px;line-height:1.5;background:linear-gradient(110deg,rgba(39,166,125,.10),rgba(82,101,196,.07));border:1px solid rgba(54,177,140,.22)}
+.balanced-notice svg{flex:none;color:#48c69f}
+.balanced-notice b{color:#6de2bb;letter-spacing:.06em}

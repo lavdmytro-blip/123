@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
-from . import config, db, telegram, worker, logos, market_moves
+from . import config, db, telegram, worker, logos, market_moves, market_filter
 from .analysis import analyze
 from .ai import ai_comment
 from .auth import optional_user, require_user
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     await market.close()
 
 
-app = FastAPI(title='BingX AI Signals', version='1.3.0', lifespan=lifespan,
+app = FastAPI(title='BingX AI Signals', version='1.3.2', lifespan=lifespan,
               docs_url=None, redoc_url=None)
 
 
@@ -154,6 +154,20 @@ async def analysis(body: AnalyzeBody, user_id: int | None = Depends(optional_use
     return result
 
 
+async def eligible_snapshot():
+    """Market eligibility is always computed from fresh-enough public API data."""
+    contracts, tickers = await asyncio.gather(market.contracts(), market.ticker())
+    allowed, report = market_filter.eligible_markets(contracts, tickers)
+    return allowed, report, {t['symbol']: t for t in map(normalize_ticker, tickers)}
+
+
+@app.get('/api/market-filter')
+async def market_filter_status():
+    """Public read-only diagnostics; exposes no accounts or private API keys."""
+    _, report, _ = await eligible_snapshot()
+    return report
+
+
 @app.get('/api/auto-signals')
 async def auto_signals(user_id: int | None = Depends(optional_user)):
     """Public feed, with per-user opt-in flag (no private account data exposed)."""
@@ -168,13 +182,18 @@ async def auto_signals(user_id: int | None = Depends(optional_user)):
                    'error': state.error} if state else {'total': 0, 'scanned': 0, 'round': 0, 'lastSymbol': '', 'lastUpdate': None, 'lastCompleted': None, 'error': ''}
         feed = [db.auto_signal_out(x) for x in rows]
     try:
-        ticker_data = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}
+        allowed, filter_report, ticker_data = await eligible_snapshot()
+        # Old excluded records are kept for audit, but not promoted to live feed.
+        feed = [row for row in feed if row['symbol'] in allowed]
         live_prices = {row['symbol']: ticker_data[row['symbol']]['lastPrice'] for row in feed
                        if row['symbol'] in ticker_data and ticker_data[row['symbol']]['lastPrice'] > 0}
         prices_fresh = True
     except MarketDataError:
-        live_prices, prices_fresh = {}, False
+        # Fail closed: absence of a trustworthy universe cannot yield a new pick.
+        feed, live_prices, prices_fresh = [], {}, False
+        filter_report = {**market_filter.filter_settings(), 'error': 'BingX market data unavailable'}
     return {'signals': feed, 'prices': live_prices, 'pricesFresh': prices_fresh,
+            'marketFilter': filter_report,
             'updatedAt': __import__('time').time_ns() // 1_000_000,
             'subscribed': subscribed, 'scannerEnabled': config.ENABLE_WORKER and config.AUTO_SIGNALS_ENABLED,
             'scanner': scanner, 'topSymbols': list(worker.POPULAR_MARKETS)}
@@ -203,7 +222,15 @@ async def pump_events(user_id: int | None = Depends(optional_user)):
         events = session.scalars(select(db.PumpEvent).order_by(db.PumpEvent.id.desc()).limit(100)).all()
         preference = session.get(db.PumpSubscription, user_id) if user_id else None
         subscribed = bool(preference and preference.enabled)
+    try:
+        allowed, filter_report, _ = await eligible_snapshot()
+    except MarketDataError:
+        allowed = set()
+        filter_report = {**market_filter.filter_settings(), 'error': 'BingX market data unavailable'}
+    # Archive is not deleted; old excluded symbols are simply hidden in the feed.
+    events = [event for event in events if event.symbol in allowed]
     return {'events': [db.pump_event_out(event) for event in events],
+            'marketFilter': filter_report,
             'subscribed': subscribed, 'monitorEnabled': config.ENABLE_WORKER and config.PUMP_MONITOR_ENABLED,
             'monitor': {'observed': move_monitor.observed, 'updatedAt': move_monitor.last_update,
                         'error': move_monitor.last_error, 'warmingUp': move_monitor.last_update is None

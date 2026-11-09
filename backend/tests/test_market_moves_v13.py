@@ -50,18 +50,22 @@ def test_volumes_require_fresh_contiguous_closed_candles():
 def test_market_event_persists_and_deduplicates(monkeypatch):
     factory = isolated_db(monkeypatch)
     monkeypatch.setattr(config, 'PUMP_MIN_24H_USDT', 10_000)
+    monkeypatch.setattr(config, 'MARKET_MIN_24H_USDT', 10_000)
     monkeypatch.setattr(config, 'PUMP_MIN_TURNOVER_USDT', 200)
     monkeypatch.setattr(config, 'PUMP_VOLUME_MULTIPLIER', 2.0)
     monkeypatch.setattr(config, 'PUMP_THRESHOLD_PERCENT', 3.0)
     class FakeMarket:
         price = 100
         candle_queries = 0
+        async def contracts(self):
+            return [{'symbol':'BTC-USDT','launchTime':1_700_000_000_000}]
         async def ticker(self):
             return [{'symbol':'BTC-USDT','lastPrice':str(self.price),'quoteVolume':'200000'}]
         async def candles(self,symbol,interval,limit=35):
             self.candle_queries += 1
             return minutes(1_800_000_000_000)
     market = FakeMarket()
+    monkeypatch.setattr(main, 'market', market)
     watcher = market_moves.MoveMonitor()
     sent=[]
     async def sender(*args): sent.append(args)

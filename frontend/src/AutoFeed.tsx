@@ -64,9 +64,11 @@ export function AutoFeed({authorized,favorites,tickers,onOpen,toast}:{authorized
     catch(e){toast((e as Error).message)}finally{setSubBusy(false)}
   }
   return <>
-    <div className="section-header auto-header"><div><div className="eyebrow muted">AUTO SCANNER / PAPER TRACKING</div><h1>Автосигналы <span className="heading-dot">.</span></h1><p>Алгоритм последовательно проверяет все доступные USDT-фьючерсы BingX и отслеживает виртуальные TP / SL. Часть сценариев может не пройти фильтры.</p></div>
+    <div className="section-header auto-header"><div><div className="eyebrow muted">AUTO SCANNER / PAPER TRACKING</div><h1>Автосигналы <span className="heading-dot">.</span></h1><p>Алгоритм проверяет только ликвидные USDT-фьючерсы BingX старше 30 дней и отслеживает виртуальные TP / SL.</p></div>
       <button className="outline-btn" onClick={()=>void load()}><RefreshCcw size={16}/> Обновить</button>
     </div>
+    <div className="panel balanced-notice"><ShieldCheck size={17}/><span><b>BALANCED</b> · Оборот ≥ ${((feed?.marketFilter?.min24hTurnoverUSDT??10000000)/1000000).toFixed(0)} млн/24ч · Возраст контракта ≥ {feed?.marketFilter?.minListingAgeDays??30} дней · Нестандартные токены исключены{feed?.marketFilter?.eligible!=null?` · Допущено ${feed.marketFilter.eligible} пар`:''}</span></div>
+    {feed?.marketFilter?.error&&<div className="auto-warning"><Info size={16}/> Проверка фильтра: {feed.marketFilter.error}</div>}
     <div className="auto-toolbar panel"><div className="auto-stream"><Radio size={18}/><strong>Рыночная лента</strong><span className={'stream-tag '+stream}>{symbols.length&&stream==='live'?'LIVE · BingX':stream==='connecting'?'ПОДКЛЮЧЕНИЕ':stream==='reconnecting'?'ПЕРЕПОДКЛЮЧЕНИЕ':'ОБНОВЛЕНИЕ REST'}</span></div>
       <button disabled={subBusy} className={'outline-btn auto-sub '+(feed?.subscribed?'watch-active':'')} onClick={()=>void toggleSub()}>{subBusy?<LoaderCircle size={16} className="spin"/>:<BellRing size={16}/>} {feed?.subscribed?'Уведомления подключены':'Уведомлять в Telegram'}</button>
     </div>

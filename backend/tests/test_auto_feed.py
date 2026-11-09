@@ -20,9 +20,11 @@ def isolated_db(monkeypatch):
 class FakeMarket:
     def __init__(self, rows): self.rows = rows
     async def symbols(self): return ['BTC-USDT']
+    async def contracts(self):
+        return [{'symbol':'BTC-USDT', 'launchTime':1_700_000_000_000}]
     async def candles(self, symbol, interval, limit=310): return self.rows
     async def ticker(self, symbol=None):
-        return [{'symbol': 'BTC-USDT', 'lastPrice': '100', 'priceChangePercent': '0'}]
+        return [{'symbol': 'BTC-USDT', 'lastPrice': '100', 'priceChangePercent': '0', 'quoteVolume': '20000000'}]
 
 
 def test_scanner_deduplicates_closed_candle_and_public_api(monkeypatch):

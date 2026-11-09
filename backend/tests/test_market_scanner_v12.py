@@ -54,11 +54,13 @@ def test_all_market_scan_visits_more_than_old_eight_symbol_cap(monkeypatch):
     monkeypatch.setattr(config,'AUTO_SIGNALS_UNIVERSE','ALL')
     monkeypatch.setattr(config,'AUTO_SIGNALS_INTERVAL','15m')
     monkeypatch.setattr(config,'AUTO_SCAN_PACE_SECONDS',0)
-    names=['COIN'+str(i)+'-USDT' for i in range(26)]
+    names=['COIN'+chr(65+i)+'-USDT' for i in range(26)]
     class ManyMarkets:
         def __init__(self): self.visited=[]
-        async def symbols(self): return names
-        async def ticker(self): return [dict(symbol=x,lastPrice='1',quoteVolume='100') for x in names]
+        async def contracts(self):
+            return [dict(symbol=x, launchTime=1_700_000_000_000) for x in names]
+        async def ticker(self):
+            return [dict(symbol=x,lastPrice='1',quoteVolume='20000000') for x in names]
         async def candles(self,symbol,interval,limit=310):
             self.visited.append(symbol)
             return []  # no data -> no fabricated signal

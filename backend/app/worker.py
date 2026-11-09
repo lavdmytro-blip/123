@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from sqlalchemy import select
-from . import db, telegram, config
+from . import db, telegram, config, market_filter
 from .analysis import analyze
 from .ai import ai_comment
 from .bingx import normalize_ticker, MarketDataError
@@ -249,12 +249,15 @@ async def auto_scan(market, *, max_symbols: int | None = None):
     if interval not in config.INTERVALS:
         log.error('Invalid auto scan interval %s', interval)
         return 0
-    symbols = await market.symbols()
-    try:
-        quotes = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}
-    except MarketDataError:
-        quotes = {}
-    rotation = ordered_universe(symbols, list(quotes.values()))
+    # Contract launchTime + USDT quoteVolume are mandatory for automatic signals.
+    # Missing data must not accidentally promote a new or obscure pair.
+    contracts = await market.contracts()
+    ticker_rows = await market.ticker()
+    allowed, eligibility = market_filter.eligible_markets(contracts, ticker_rows)
+    quotes = {t['symbol']: t for t in map(normalize_ticker, ticker_rows)}
+    rotation = ordered_universe(sorted(allowed), list(quotes.values()))
+    log.info('Balanced filter: %s/%s eligible; excluded %s',
+             eligibility['eligible'], eligibility['evaluated'], eligibility['reasons'])
     total = len(rotation)
     if max_symbols is not None:
         rotation = rotation[:max_symbols]
@@ -347,6 +350,15 @@ async def update_auto_signals(market):
                         notifications.append((sig.symbol, f'📊 {sig.symbol} {sig.side} · {status_text}\n'
                                               f'Цена входа: {sig.entry:.9g} · SL: {sig.stop:.9g}\n'
                                               'Проверено по закрытым минутным свечам, не исполненная сделка.'))
+    if notifications:
+        # Existing pre-filter scenarios may still be monitored for audit, but
+        # must not generate new Telegram notifications for excluded symbols.
+        try:
+            contracts, raw_tickers = await asyncio.gather(market.contracts(), market.ticker())
+            allowed, _ = market_filter.eligible_markets(contracts, raw_tickers)
+        except MarketDataError:
+            allowed = set()  # fail closed when qualification cannot be checked
+        notifications = [(sym, msg) for sym, msg in notifications if sym in allowed]
     if notifications:
         with db.Session() as session:
             subs = session.scalars(select(db.AutoSignalSubscription).where(
