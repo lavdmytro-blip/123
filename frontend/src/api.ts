@@ -40,3 +40,9 @@ export function getAutoHistory(filters:{page:number;pageSize:number;outcome:impo
  const params=new URLSearchParams({page:String(filters.page),page_size:String(filters.pageSize),outcome:filters.outcome,side:filters.side,symbol:filters.symbol,date_from:filters.dateFrom,date_to:filters.dateTo})
  return api<import('./types').AutoHistoryResponse>('/api/auto-history?'+params.toString())
 }
+
+// Authenticated virtual ledger; NO exchange keys or real-order endpoints.
+export const getPaperAccount=()=>api<import('./types').PaperAccountResponse>('/api/paper')
+export const setPaperEnabled=(enabled:boolean)=>api<{enabled:boolean}>('/api/paper/config',{method:'POST',body:JSON.stringify({enabled})})
+export const resetPaper=()=>api<{ok:boolean}>('/api/paper/reset',{method:'POST'})
+export const closePaperPosition=(id:number)=>api<{ok:boolean}>('/api/paper/positions/'+id+'/close',{method:'POST'})

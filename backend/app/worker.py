@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from sqlalchemy import select
-from . import db, telegram, config, market_filter
+from . import db, telegram, config, market_filter, paper
 from .analysis import analyze
 from .ai import ai_comment
 from .bingx import normalize_ticker, MarketDataError
@@ -216,7 +216,16 @@ async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int
         session.add(sig)
         session.flush()
         new_id = sig.id
-    log.info('Paper scenario #%s published for %s %s', new_id, symbol, interval)
+        paper_opened = paper.open_for_signal(session, sig, live)
+    log.info('Paper scenario #%s published for %s %s; demo entries: %d', new_id, symbol, interval, len(paper_opened))
+    # Notify only those who explicitly opted into the simulation and Telegram alerts.
+    for uid, position_id in paper_opened:
+        with db.Session() as session:
+            person = session.get(db.Person, uid)
+            chat = person.chat_id if person and person.notifications else None
+        if chat:
+            await telegram.send(chat, f'📒 Открыта ДЕМО-позиция #{position_id} · {symbol} {result["side"]}\n'
+                          f'Виртуальный вход ≈ {live:.9g} USDT. Это не реальный ордер.')
     with db.Session() as session:
         subscribers = session.scalars(select(db.AutoSignalSubscription).where(
             db.AutoSignalSubscription.enabled.is_(True)).limit(100)).all()
@@ -386,6 +395,14 @@ async def loop(market):
             await update_signals(market)
             if config.AUTO_SIGNALS_ENABLED:
                 await update_auto_signals(market)
+            # Independent ledger settlement: a global scenario can finish but each
+            # opt-in paper account must settle its own partial fills.
+            for uid, message in await paper.update_positions(market):
+                with db.Session() as session:
+                    person = session.get(db.Person, uid)
+                    chat = person.chat_id if person and person.notifications else None
+                if chat:
+                    await telegram.send(chat, message)
             if cycles % 4 == 0:
                 await update_watches(market)
         except asyncio.CancelledError:

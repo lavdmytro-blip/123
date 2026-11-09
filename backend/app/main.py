@@ -11,7 +11,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete, func
-from . import config, db, telegram, worker, logos, market_moves, market_filter
+from . import config, db, telegram, worker, logos, market_moves, market_filter, paper
 from .analysis import analyze
 from .ai import ai_comment
 from .auth import optional_user, require_user
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     await market.close()
 
 
-app = FastAPI(title='BingX AI Signals', version='1.3.3', lifespan=lifespan,
+app = FastAPI(title='BingX AI Signals', version='1.4.0', lifespan=lifespan,
               docs_url=None, redoc_url=None)
 
 
@@ -380,6 +380,88 @@ async def change_favorite(body: FavoriteBody, user_id: int = Depends(require_use
         if not body.active and existing:
             session.delete(existing)
     return {'ok': True}
+
+
+
+# The paper ledger is AUTHENTICATED and OPT-IN. All balance amounts are
+# simulated USDT; no exchange key, private endpoint, or actual order is used.
+@app.get('/api/paper')
+async def paper_account(user_id: int = Depends(require_user)):
+    with db.Session() as session:
+        account = session.get(db.PaperAccount, user_id)
+        has_open = bool(account and session.scalar(select(db.PaperPosition.id).where(
+            db.PaperPosition.user_id == user_id,
+            db.PaperPosition.status.in_(('OPEN', 'DATA_GAP')))))
+    prices = {}
+    if has_open:
+        try:
+            raw = await market.ticker()
+            prices = {t['symbol']: t['lastPrice'] for t in map(normalize_ticker, raw)
+                      if t['lastPrice'] > 0 and abs(int(__import__('time').time() * 1000) - t['time']) <= 120000}
+        except MarketDataError:
+            prices = None
+    with db.Session() as session:
+        return paper.account_snapshot(session, user_id, prices)
+
+
+class PaperConfigBody(BaseModel):
+    enabled: bool
+
+
+@app.post('/api/paper/config')
+async def paper_config(body: PaperConfigBody, user_id: int = Depends(require_user)):
+    with db.Session.begin() as session:
+        db.get_person(session, user_id)
+        account = session.get(db.PaperAccount, user_id)
+        if not account:
+            account = db.PaperAccount(user_id=user_id, enabled=body.enabled,
+                                      cash=config.PAPER_START_USDT,
+                                      initial_balance=config.PAPER_START_USDT)
+            session.add(account)
+        else:
+            account.enabled = body.enabled
+    return {'enabled': body.enabled, 'note': 'Only virtual positions; no real trades.'}
+
+
+@app.post('/api/paper/reset')
+async def paper_reset(user_id: int = Depends(require_user)):
+    with db.Session.begin() as session:
+        account = session.get(db.PaperAccount, user_id)
+        if not account or account.enabled:
+            raise HTTPException(400, 'Сначала выключи автоматическую демо-торговлю')
+        position_ids = session.scalars(select(db.PaperPosition.id).where(
+            db.PaperPosition.user_id == user_id)).all()
+        if session.scalar(select(db.PaperPosition.id).where(
+            db.PaperPosition.user_id == user_id,
+            db.PaperPosition.status.in_(('OPEN', 'DATA_GAP')))):
+            raise HTTPException(400, 'Сначала закрой все открытые виртуальные позиции')
+        if position_ids:
+            session.execute(delete(db.PaperFill).where(db.PaperFill.position_id.in_(position_ids)))
+            session.execute(delete(db.PaperPosition).where(db.PaperPosition.user_id == user_id))
+        account.cash = config.PAPER_START_USDT
+        account.initial_balance = config.PAPER_START_USDT
+    return {'ok': True, 'balance': config.PAPER_START_USDT}
+
+
+@app.post('/api/paper/positions/{position_id}/close')
+async def paper_close(position_id: int, user_id: int = Depends(require_user)):
+    with db.Session() as session:
+        position = session.get(db.PaperPosition, position_id)
+        if not position or position.user_id != user_id:
+            raise HTTPException(404, 'Демо-позиция не найдена')
+        if position.status not in ('OPEN', 'DATA_GAP'):
+            raise HTTPException(400, 'Позиция уже закрыта')
+        symbol = position.symbol
+    rows = await market.ticker(symbol)
+    quote = normalize_ticker(rows[0]) if rows else None
+    if not quote or quote['lastPrice'] <= 0 or abs(int(__import__('time').time() * 1000) - quote['time']) > 120000:
+        raise HTTPException(503, 'Нет свежей котировки для виртуального закрытия')
+    with db.Session.begin() as session:
+        position = session.get(db.PaperPosition, position_id)
+        if not position or position.user_id != user_id or position.status not in ('OPEN', 'DATA_GAP'):
+            raise HTTPException(409, 'Позиция уже изменена')
+        paper.manual_close(session, position, quote['lastPrice'])
+    return {'ok': True, 'note': 'Virtual close, never a BingX order.'}
 
 
 @app.get('/api/history')

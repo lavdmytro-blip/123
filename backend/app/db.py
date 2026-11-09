@@ -142,6 +142,58 @@ class Watch(Base):
     __table_args__ = (UniqueConstraint('user_id', 'symbol', 'interval'),)
 
 
+
+class PaperAccount(Base):
+    """Opt-in personal ledger. No exchange credentials or real order placement."""
+    __tablename__ = 'paper_accounts'
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    cash: Mapped[float] = mapped_column(Float, default=1000.0)
+    initial_balance: Mapped[float] = mapped_column(Float, default=1000.0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PaperPosition(Base):
+    """1x synthetic long/short P&L; deposited margin is simulated, not borrowed."""
+    __tablename__ = 'paper_positions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    auto_signal_id: Mapped[int] = mapped_column(Integer, ForeignKey('auto_signals.id'))
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str] = mapped_column(String(6))
+    entry_quote: Mapped[float] = mapped_column(Float)
+    entry_fill: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    tp1: Mapped[float] = mapped_column(Float)
+    tp2: Mapped[float] = mapped_column(Float)
+    tp3: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float] = mapped_column(Float)
+    remaining: Mapped[float] = mapped_column(Float)
+    margin_open: Mapped[float] = mapped_column(Float)
+    fees: Mapped[float] = mapped_column(Float, default=0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0)
+    tp_reached: Mapped[int] = mapped_column(Integer, default=0)
+    last_checked: Mapped[int] = mapped_column(BigInteger, default=0)
+    status: Mapped[str] = mapped_column(String(16), default='OPEN')
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (UniqueConstraint('user_id', 'auto_signal_id'),)
+
+
+class PaperFill(Base):
+    __tablename__ = 'paper_fills'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    position_id: Mapped[int] = mapped_column(Integer, ForeignKey('paper_positions.id'), index=True)
+    reason: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[float] = mapped_column(Float)
+    reference_price: Mapped[float] = mapped_column(Float)
+    fill_price: Mapped[float] = mapped_column(Float)
+    fee: Mapped[float] = mapped_column(Float)
+    pnl: Mapped[float] = mapped_column(Float)
+    candle_time: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 def init_db():
     # Upgrade previous Railway PostgreSQL databases without dropping saved records.
     # Existing rows retain NULL; the API can show a last-candle estimate for old outcomes.

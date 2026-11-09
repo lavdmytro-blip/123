@@ -42,3 +42,11 @@ PUMP_VOLUME_MULTIPLIER = max(1.0, min(float(os.getenv('PUMP_VOLUME_MULTIPLIER', 
 PUMP_MIN_TURNOVER_USDT = max(1000, float(os.getenv('PUMP_MIN_TURNOVER_USDT', '20000')))
 PUMP_MIN_24H_USDT = max(10000, float(os.getenv('PUMP_MIN_24H_USDT', '100000')))
 PUMP_COOLDOWN_MINUTES = max(5, min(int(os.getenv('PUMP_COOLDOWN_MINUTES', '30')), 240))
+
+# v1.4: opt-in paper trading, solely a local 1x virtual ledger.
+PAPER_START_USDT = 1000.0
+PAPER_MAX_POSITIONS = 2
+PAPER_MAX_ALLOCATION = 0.20   # max 20% of *available* virtual USDT per entry
+PAPER_RISK_FRACTION = 0.01     # no more than 1% of account size at modeled stop
+PAPER_FEE_RATE = 0.0005        # illustrative fee, per executed side
+PAPER_SLIPPAGE = 0.0005        # illustrative adverse slippage, per fill
