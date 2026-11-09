@@ -31,7 +31,15 @@ async def setup():
         await call('setChatMenuButton', {
             'menu_button': {'type': 'web_app', 'text': 'Открыть сигналы', 'web_app': {'url': config.PUBLIC_BASE_URL}}
         })
-        log.info('Telegram webhook and menu button configured')
+        await call('setMyCommands', {'commands': [
+            {'command': 'start', 'description': 'Открыть приложение'},
+            {'command': 'pump_on', 'description': 'Включить PUMP/DUMP'},
+            {'command': 'pump_off', 'description': 'Отключить PUMP/DUMP'},
+            {'command': 'signals_on', 'description': 'Включить AI сигналы'},
+            {'command': 'signals_off', 'description': 'Отключить AI сигналы'},
+            {'command': 'status', 'description': 'Статус подписок'},
+        ]})
+        log.info('Telegram webhook, menu and commands configured')
     except Exception:
         log.exception('Failed to configure Telegram webhook')
 
@@ -47,13 +55,32 @@ async def send(chat_id: int, text: str):
         return False
 
 
+async def send_market(chat_id: int, text: str, symbol: str):
+    """Private-chat notification with a direct Telegram Mini App chart button."""
+    if not config.BOT_TOKEN or not chat_id:
+        return False
+    data = {'chat_id': chat_id, 'text': text[:4000], 'disable_web_page_preview': True}
+    if config.PUBLIC_BASE_URL and symbol.endswith('-USDT') and symbol.replace('-', '').isalnum():
+        from urllib.parse import quote
+        data['reply_markup'] = {'inline_keyboard': [[{
+            'text': '📈 Открыть график в Mini App',
+            'web_app': {'url': config.PUBLIC_BASE_URL + '/?symbol=' + quote(symbol)},
+        }]]}
+    try:
+        await call('sendMessage', data)
+        return True
+    except Exception:
+        log.exception('Telegram market alert failed')
+        return False
+
+
 async def welcome(chat_id: int):
     if not config.PUBLIC_BASE_URL:
         await send(chat_id, 'Бот ещё не настроен. Администратор должен указать PUBLIC_BASE_URL в Railway.')
         return
     try:
         await call('sendMessage', {
-            'chat_id': chat_id, 'text': '📊 BingX AI Signals\n\nАнализ рынка по реальным данным BingX. Сигналы — технические сценарии, не гарантия результата. Торговых операций нет.',
+            'chat_id': chat_id, 'text': '📊 BingX AI Signals\n\nАнализ рынка по данным BingX. Для сообщений о резких движениях отправь /pump_on, для обычных сценариев — /signals_on. Отключение: /pump_off и /signals_off.\n\nЭто наблюдения рынка, не гарантия будущих движений. Торговых операций нет.',
             'reply_markup': {'inline_keyboard': [[{'text': '📈 Открыть Mini App', 'web_app': {'url': config.PUBLIC_BASE_URL}}]]},
         })
     except Exception:

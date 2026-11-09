@@ -32,3 +32,6 @@ export const getWatches=()=>api<{watches:Watch[]}>('/api/watches')
 export const changeWatch=(symbol:string,interval:Timeframe,active:boolean)=>api<{ok:boolean}>('/api/watches',{method:'POST',body:JSON.stringify({symbol,interval,active})})
 export const getAutoFeed=()=>api<import('./types').AutoFeedResponse>('/api/auto-signals')
 export const autoSubscribe=(enabled:boolean)=>api<{enabled:boolean}>('/api/auto-subscription',{method:'POST',body:JSON.stringify({enabled})})
+
+export const getPumpFeed=()=>api<import('./types').PumpFeedResponse>('/api/pump-events')
+export const pumpSubscribe=(enabled:boolean)=>api<{enabled:boolean}>('/api/pump-subscription',{method:'POST',body:JSON.stringify({enabled})})

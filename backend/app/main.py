@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
-from . import config, db, telegram, worker, logos
+from . import config, db, telegram, worker, logos, market_moves
 from .analysis import analyze
 from .ai import ai_comment
 from .auth import optional_user, require_user
@@ -19,6 +19,7 @@ from .bingx import BingX, MarketDataError, normalize_ticker
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 market = BingX()
+move_monitor = market_moves.MoveMonitor()
 
 
 @asynccontextmanager
@@ -27,7 +28,12 @@ async def lifespan(app: FastAPI):
     await telegram.setup()
     task = asyncio.create_task(worker.loop(market)) if config.ENABLE_WORKER else None
     scan_task = asyncio.create_task(worker.scanner_loop(market)) if config.ENABLE_WORKER and config.AUTO_SIGNALS_ENABLED else None
+    pump_task = asyncio.create_task(move_monitor.loop(market)) if config.ENABLE_WORKER and config.PUMP_MONITOR_ENABLED else None
     yield
+    if pump_task:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
     if scan_task:
         scan_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -39,7 +45,7 @@ async def lifespan(app: FastAPI):
     await market.close()
 
 
-app = FastAPI(title='BingX AI Signals', version='1.0.0', lifespan=lifespan,
+app = FastAPI(title='BingX AI Signals', version='1.3.0', lifespan=lifespan,
               docs_url=None, redoc_url=None)
 
 
@@ -190,6 +196,40 @@ async def auto_subscription(body: AutoSubscriptionBody, user_id: int = Depends(r
     return {'enabled': body.enabled}
 
 
+@app.get('/api/pump-events')
+async def pump_events(user_id: int | None = Depends(optional_user)):
+    """Public observed market movements; private notification preference per user."""
+    with db.Session() as session:
+        events = session.scalars(select(db.PumpEvent).order_by(db.PumpEvent.id.desc()).limit(100)).all()
+        preference = session.get(db.PumpSubscription, user_id) if user_id else None
+        subscribed = bool(preference and preference.enabled)
+    return {'events': [db.pump_event_out(event) for event in events],
+            'subscribed': subscribed, 'monitorEnabled': config.ENABLE_WORKER and config.PUMP_MONITOR_ENABLED,
+            'monitor': {'observed': move_monitor.observed, 'updatedAt': move_monitor.last_update,
+                        'error': move_monitor.last_error, 'warmingUp': move_monitor.last_update is None
+                        or int(__import__('time').time()) - int(move_monitor.started_at) < 300},
+            'criteria': {'windowMinutes': 5, 'minChangePercent': config.PUMP_THRESHOLD_PERCENT,
+                         'minVolumeRatio': config.PUMP_VOLUME_MULTIPLIER}}
+
+
+class PumpSubscriptionBody(BaseModel):
+    enabled: bool
+
+
+@app.post('/api/pump-subscription')
+async def pump_subscription(body: PumpSubscriptionBody, user_id: int = Depends(require_user)):
+    with db.Session.begin() as session:
+        person = db.get_person(session, user_id)
+        if body.enabled and not person.chat_id:
+            raise HTTPException(400, 'Сначала напиши /start в личном чате своего Telegram-бота')
+        sub = session.get(db.PumpSubscription, user_id)
+        if sub:
+            sub.enabled = body.enabled
+        else:
+            session.add(db.PumpSubscription(user_id=user_id, enabled=body.enabled))
+    return {'enabled': body.enabled}
+
+
 @app.get('/api/me')
 async def me(user_id: int = Depends(require_user)):
     with db.Session.begin() as session:
@@ -334,11 +374,41 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str = Heade
     message = update.get('message') or {}
     chat = message.get('chat') or {}
     user = message.get('from') or {}
-    if chat.get('type') == 'private' and int(user.get('id') or 0) > 0 and message.get('text', '').startswith('/start'):
-        with db.Session.begin() as session:
-            person = db.get_person(session, int(user['id']))
-            person.chat_id = int(chat['id'])
-        await telegram.welcome(int(chat['id']))
+    if chat.get('type') == 'private' and int(user.get('id') or 0) > 0:
+        uid, cid = int(user['id']), int(chat['id'])
+        command = (message.get('text') or '').split(maxsplit=1)[0].split('@')[0].lower()
+        if command == '/start':
+            with db.Session.begin() as session:
+                person = db.get_person(session, uid)
+                person.chat_id = cid
+            await telegram.welcome(cid)
+        elif command in ('/pump_on', '/pump_off', '/signals_on', '/signals_off'):
+            enabled = command.endswith('_on')
+            is_pump = command.startswith('/pump_')
+            model = db.PumpSubscription if is_pump else db.AutoSignalSubscription
+            with db.Session.begin() as session:
+                person = db.get_person(session, uid)
+                person.chat_id = cid
+                sub = session.get(model, uid)
+                if sub:
+                    sub.enabled = enabled
+                else:
+                    session.add(model(user_id=uid, enabled=enabled))
+            kind = 'PUMP/DUMP' if is_pump else 'LONG/SHORT сценариев'
+            await telegram.send(cid, f'🔔 Уведомления {kind}: {"включены" if enabled else "отключены"}.\n'
+                                     'Переключить можно также во вкладке AI Сигналы.')
+        elif command in ('/help', '/status'):
+            with db.Session() as session:
+                pump = session.get(db.PumpSubscription, uid)
+                auto = session.get(db.AutoSignalSubscription, uid)
+            await telegram.send(cid, f'📡 Настройки уведомлений\n'
+                f'PUMP/DUMP: {"ВКЛ" if pump and pump.enabled else "ВЫКЛ"}\n'
+                f'AI Сигналы: {"ВКЛ" if auto and auto.enabled else "ВЫКЛ"}\n\n'
+                '/pump_on — включить резкие движения\n'
+                '/pump_off — отключить резкие движения\n'
+                '/signals_on — включить LONG/SHORT сценарии\n'
+                '/signals_off — отключить LONG/SHORT сценарии\n'
+                '/status — показать статус')
     return {'ok': True}
 
 

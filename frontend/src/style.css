@@ -72,3 +72,29 @@
 @media(max-width:720px){.auto-filter-panel,.scanner-progress{padding:13px}.auto-filter-buttons button{padding:7px 8px;font-size:10px}.auto-search,.auto-sort{width:100%;max-width:100%}.scanner-progress-foot{font-size:10px}}
 
 .history-icon:has(.real-coin-logo),.alert-icon:has(.real-coin-logo){background:transparent!important;border:0!important}
+
+/* v1.3 — read-only PUMP/DUMP event monitoring */
+.signal-hub-tabs{display:flex;gap:9px;flex-wrap:wrap;margin:8px 0 22px;padding:5px;border:1px solid var(--stroke);border-radius:13px;background:var(--panel)}
+.signal-hub-tabs button{display:flex;align-items:center;justify-content:center;gap:9px;flex:1;min-width:130px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-weight:800;font-size:12px;padding:13px;cursor:pointer}
+.signal-hub-tabs button.selected{background:linear-gradient(130deg,#694ccc,#9370ec);color:#fff;box-shadow:0 8px 22px #744fc42e}
+.signal-hub-tabs button.pump-selected{background:linear-gradient(120deg,#a15b34,#bb477a)}
+.pump-header{margin-top:6px}.pump-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:19px;margin-bottom:15px}
+.pump-toolbar-title{display:flex;align-items:center;gap:12px;color:#ef9379}
+.pump-toolbar-title>div{display:flex;flex-direction:column;gap:6px}.pump-toolbar-title b{font-size:12px;color:var(--text)}.pump-toolbar-title small{font-size:10px;color:var(--muted)}
+.pump-threshold{padding:14px 17px;display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-bottom:16px;color:var(--muted);font-size:11px}
+.pump-threshold svg{color:#d98b5f}.pump-threshold b{color:var(--text)}
+.pump-count{font-size:11px;color:var(--muted);align-self:center}
+.pump-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:15px;margin-bottom:24px}
+.pump-item{padding:20px;display:flex;flex-direction:column;gap:15px}
+.pump-item-head{display:flex;gap:12px;align-items:center}
+.pump-asset{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
+.pump-asset strong{font-size:13px}.pump-asset small{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted)}
+.pump-tag{display:inline-flex;gap:5px;align-items:center;justify-content:center;padding:8px 10px;border-radius:9px;font-size:10px;font-weight:900}
+.pump-tag.up{background:#27cc9920;color:var(--green)}.pump-tag.down{background:#f16e8c22;color:var(--red)}
+.pump-change{font-size:33px;font-weight:850;letter-spacing:-1px}.pump-change small{font-size:11px;font-weight:500;letter-spacing:0;color:var(--muted)}
+.pump-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.pump-metrics>div{padding:12px;background:var(--panel2);border:1px solid var(--stroke);border-radius:8px;min-width:0}
+.pump-metrics small{display:block;color:var(--muted);font-size:9px;margin-bottom:7px}
+.pump-metrics b{display:block;font-size:13px;overflow-wrap:anywhere}
+.pump-chart-link{align-self:stretch;justify-content:center}
+@media(max-width:720px){.pump-toolbar{flex-direction:column;align-items:stretch}.pump-toolbar .auto-sub{width:100%;justify-content:center}.pump-metrics b{font-size:11px}.pump-item{padding:15px}.signal-hub-tabs button{font-size:11px}}

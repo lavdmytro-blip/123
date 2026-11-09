@@ -227,10 +227,13 @@ async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int
                 chats.append(person.chat_id)
     # Network sends should not block the market rotation for too long.
     for chat_id in chats:
-        await telegram.send(chat_id, f'📡 Виртуальный сценарий {symbol} {interval}: {result["side"]}\n'
-            f'Entry {result["entry"]:.9g} · TP1 {result["takeProfits"][0]:.9g}'
-            f' · SL {result["stopLoss"]:.9g}\n'
-            'Аналитический сценарий, не реальная сделка. Проверяйте актуальность в Mini App.')
+        await telegram.send_market(chat_id, f'📡 Аналитический сценарий · {symbol} ({interval})\n'
+            f'Направление: {result["side"]}\n'
+            f'Entry: {result["entry"]:.9g} · SL: {result["stopLoss"]:.9g}\n'
+            f'TP1: {result["takeProfits"][0]:.9g}\n'
+            f'TP2: {result["takeProfits"][1]:.9g}\n'
+            f'TP3: {result["takeProfits"][2]:.9g}\n'
+            'Виртуальный сценарий, не сделка и не прогноз с гарантией.', symbol)
     return True
 
 
@@ -304,6 +307,7 @@ async def update_auto_signals(market):
     with db.Session() as session:
         active = session.scalars(select(db.AutoSignal).where(db.AutoSignal.status == 'ACTIVE').limit(500)).all()
         jobs = [(x.id, x.symbol, _created_ms(x)) for x in active]
+    notifications: list[tuple[str, str]] = []
     for symbol in sorted({x[1] for x in jobs}):
         try:
             candles = await market.candles(symbol, '1m', 300)
@@ -334,6 +338,27 @@ async def update_auto_signals(market):
                         break
                 if sig.status == 'ACTIVE' and now_ms - created > 24 * 3600_000:
                     sig.status = 'EXPIRED'
+                # Preserve exactly one notification per new milestone after persistence.
+                if sig.status != 'ACTIVE' or sig.tp_reached:
+                    previous = next((x for x in active if x.id == item_id), None)
+                    if previous and (previous.status != sig.status or previous.tp_reached != sig.tp_reached):
+                        status_text = (f'TP{sig.tp_reached} достигнут' if sig.status == 'ACTIVE'
+                                       else f'Итог: {sig.status}' + (f' · достигнуто TP{sig.tp_reached}' if sig.tp_reached else ''))
+                        notifications.append((sig.symbol, f'📊 {sig.symbol} {sig.side} · {status_text}\n'
+                                              f'Цена входа: {sig.entry:.9g} · SL: {sig.stop:.9g}\n'
+                                              'Проверено по закрытым минутным свечам, не исполненная сделка.'))
+    if notifications:
+        with db.Session() as session:
+            subs = session.scalars(select(db.AutoSignalSubscription).where(
+                db.AutoSignalSubscription.enabled.is_(True)).limit(1000)).all()
+            chats = []
+            for sub in subs:
+                person = session.get(db.Person, sub.user_id)
+                if person and person.chat_id and person.notifications:
+                    chats.append(person.chat_id)
+        for symbol, message in notifications:
+            for chat_id in chats:
+                await telegram.send_market(chat_id, message, symbol)
 
 
 async def loop(market):

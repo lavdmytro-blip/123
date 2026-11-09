@@ -99,6 +99,27 @@ class ScannerState(Base):
     error: Mapped[str] = mapped_column(String(200), default='')
 
 
+class PumpEvent(Base):
+    """Observed rapid price movement, not a prediction or trading recommendation."""
+    __tablename__ = 'pump_events'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    direction: Mapped[str] = mapped_column(String(5))  # PUMP / DUMP
+    change_pct: Mapped[float] = mapped_column(Float)
+    start_price: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    volume_ratio: Mapped[float] = mapped_column(Float)
+    turnover_usdt: Mapped[float] = mapped_column(Float)
+    occurred_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PumpSubscription(Base):
+    """Private-chat pump/dump alerts are opt-in, independent of ordinary signals."""
+    __tablename__ = 'pump_subscriptions'
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class Alert(Base):
     __tablename__ = 'alerts'
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -145,3 +166,11 @@ def auto_signal_out(s: AutoSignal) -> dict:
             'entry': s.entry, 'stopLoss': s.stop, 'takeProfits': [s.tp1, s.tp2, s.tp3],
             'status': s.status, 'tpReached': s.tp_reached,
             'createdAt': s.created_at.isoformat(), 'result': json.loads(s.result_json)}
+
+
+def pump_event_out(event: PumpEvent) -> dict:
+    return {'id': event.id, 'symbol': event.symbol, 'direction': event.direction,
+            'changePercent': event.change_pct, 'startPrice': event.start_price,
+            'price': event.price, 'volumeRatio': event.volume_ratio,
+            'turnoverUsdt': event.turnover_usdt, 'windowMinutes': 5,
+            'occurredAt': event.occurred_at.isoformat()}
