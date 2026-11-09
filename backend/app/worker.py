@@ -180,17 +180,36 @@ def _set_scan_progress(*, total=None, scanned=None, last_symbol=None, completed=
             state.last_completed_at = db.now()
 
 
-async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int):
-    """Evaluate just-closed bars; return true only if a paper scenario was published."""
+def _save_scan_diagnostics(counts: dict[str, int], last_publish: tuple[str, dt.datetime] | None = None):
+    # This table is additive, so older PostgreSQL ledgers do not need to be dropped.
+    with db.Session.begin() as session:
+        row = session.get(db.ScannerDiagnostics, 1)
+        if row is None:
+            row = db.ScannerDiagnostics(id=1)
+            session.add(row)
+        row.reasons_json = json.dumps(counts, sort_keys=True)
+        row.updated_at = db.now()
+        if last_publish:
+            row.last_published_symbol, row.last_published_at = last_publish
+
+
+async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int,
+                    reasons: list[str] | None = None):
+    """Evaluate just-closed bars. Optionally record each rejection reason."""
+    def reason(code: str, published: bool = False):
+        if reasons is not None:
+            reasons.append(code)
+        return published
+
     step_ms = config.INTERVALS[interval] * 1000
     candles = await market.candles(symbol, interval)
     closed = [c for c in candles if c['time'] + step_ms <= now_ms]
     if len(closed) < 210:
-        return False
+        return reason('insufficient_candles')
     last_bar = closed[-1]['time']
     # Do not publish old signals if the exchange has stopped sending fresh candles.
     if now_ms - (last_bar + step_ms) > step_ms + 30_000:
-        return False
+        return reason('stale_candles')
     with db.Session() as session:
         previous = session.scalars(select(db.AutoSignal).where(
             db.AutoSignal.symbol == symbol, db.AutoSignal.interval == interval
@@ -198,14 +217,14 @@ async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int
         if previous and (previous.candle_time == last_bar or
                          (now_ms - _created_ms(previous) < 90 * 60_000) or
                          previous.status == 'ACTIVE'):
-            return False
+            return reason('existing_or_cooldown')
     result = analyze(symbol, interval, closed, None, now_ms)
     if result['side'] not in ('LONG', 'SHORT') or not result['takeProfits'] or result['entry'] is None:
-        return False
+        return reason('no_confirmed_signal')
     atr = result['metrics'].get('atr') or 0
     # A stale entry area must never be shown as if it were currently attainable.
     if not live or abs(live - result['entry']) > max(result['entry'] * 0.002, atr * 0.4):
-        return False
+        return reason('price_moved_from_entry')
     if config.OPENAI_API_KEY:
         result['aiSummary'] = await ai_comment(result)
     with db.Session.begin() as session:
@@ -243,7 +262,7 @@ async def _scan_one(market, symbol: str, interval: str, live: float, now_ms: int
             f'TP2: {result["takeProfits"][1]:.9g}\n'
             f'TP3: {result["takeProfits"][2]:.9g}\n'
             'Виртуальный сценарий, не сделка и не прогноз с гарантией.', symbol)
-    return True
+    return reason('published', published=True)
 
 
 async def auto_scan(market, *, max_symbols: int | None = None):
@@ -271,21 +290,33 @@ async def auto_scan(market, *, max_symbols: int | None = None):
     if max_symbols is not None:
         rotation = rotation[:max_symbols]
     _set_scan_progress(total=total, scanned=0, error='')
+    counts: dict[str, int] = {}
+    last_publish: tuple[str, dt.datetime] | None = None
+    _save_scan_diagnostics(counts)
     processed = 0
     for i, symbol in enumerate(rotation, 1):
         try:
             now_ms = int(time.time() * 1000)
             live = quotes.get(symbol, {}).get('lastPrice', 0)
-            await _scan_one(market, symbol, interval, live, now_ms)
+            reasons: list[str] = []
+            published = await _scan_one(market, symbol, interval, live, now_ms, reasons=reasons)
+            code = reasons[0] if reasons else 'unknown'
+            counts[code] = counts.get(code, 0) + 1
+            if published:
+                last_publish = (symbol, db.now())
         except asyncio.CancelledError:
             raise
         except MarketDataError as exc:
+            counts['market_data_error'] = counts.get('market_data_error', 0) + 1
             log.warning('Scan of %s failed: %s', symbol, exc)
         except Exception:
+            counts['unexpected_error'] = counts.get('unexpected_error', 0) + 1
             log.exception('Auto scan failed for %s', symbol)
         processed = i
         if i % config.AUTO_SCAN_BATCH_SIZE == 0 or i == len(rotation):
             _set_scan_progress(scanned=i, last_symbol=symbol)
+            _save_scan_diagnostics(counts, last_publish)
+            last_publish = None
             # Refresh price snapshot between batches, not for every coin.
             try:
                 quotes = {t['symbol']: t for t in map(normalize_ticker, await market.ticker())}

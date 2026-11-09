@@ -100,6 +100,27 @@ class ScannerState(Base):
     error: Mapped[str] = mapped_column(String(200), default='')
 
 
+class ScannerDiagnostics(Base):
+    """Latest full or partial scan's *real* rejection counts, not a performance claim."""
+    __tablename__ = 'scanner_diagnostics'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reasons_json: Mapped[str] = mapped_column(Text, default='{}')
+    last_published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_published_symbol: Mapped[str] = mapped_column(String(32), default='')
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PaperDecision(Base):
+    """Audit whether an actual new public scenario led to a virtual entry."""
+    __tablename__ = 'paper_decisions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    auto_signal_id: Mapped[int] = mapped_column(Integer, ForeignKey('auto_signals.id'))
+    reason: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (UniqueConstraint('user_id', 'auto_signal_id'),)
+
+
 class PumpEvent(Base):
     """Observed rapid price movement, not a prediction or trading recommendation."""
     __tablename__ = 'pump_events'

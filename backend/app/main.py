@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     await market.close()
 
 
-app = FastAPI(title='BingX AI Signals', version='1.4.0', lifespan=lifespan,
+app = FastAPI(title='BingX AI Signals', version='1.4.3', lifespan=lifespan,
               docs_url=None, redoc_url=None)
 
 
@@ -177,10 +177,14 @@ async def auto_signals(user_id: int | None = Depends(optional_user)):
         sub = session.get(db.AutoSignalSubscription, user_id) if user_id else None
         subscribed = bool(sub and sub.enabled)
         state = session.get(db.ScannerState, 1)
+        diagnostic = session.get(db.ScannerDiagnostics, 1)
         scanner = {'total': state.total, 'scanned': state.scanned, 'round': state.round,
                    'lastSymbol': state.last_symbol, 'lastUpdate': state.updated_at.isoformat() if state.updated_at else None,
                    'lastCompleted': state.last_completed_at.isoformat() if state.last_completed_at else None,
                    'error': state.error} if state else {'total': 0, 'scanned': 0, 'round': 0, 'lastSymbol': '', 'lastUpdate': None, 'lastCompleted': None, 'error': ''}
+        scanner['reasons'] = json.loads(diagnostic.reasons_json) if diagnostic else {}
+        scanner['lastPublishedAt'] = diagnostic.last_published_at.isoformat() if diagnostic and diagnostic.last_published_at else None
+        scanner['lastPublishedSymbol'] = diagnostic.last_published_symbol if diagnostic else ''
         feed = [db.auto_signal_out(x) for x in rows]
     try:
         allowed, filter_report, ticker_data = await eligible_snapshot()

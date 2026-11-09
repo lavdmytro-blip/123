@@ -7,6 +7,19 @@ import type {AutoFeedResponse,PaperAccountResponse,PaperPosition} from './types'
 const money=(v:number|null|undefined,d=2)=>v==null||!Number.isFinite(v)?'—':new Intl.NumberFormat('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}).format(v)
 const rate=(v:number)=>new Intl.NumberFormat('en-US',{maximumSignificantDigits:8}).format(v)
 const time=(v:string)=>new Date(v).toLocaleString('ru-RU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})
+const scanReasonLabels:Record<string,string>={
+ insufficient_candles:'Недостаточно свечей', stale_candles:'Устаревшие свечи',
+ existing_or_cooldown:'Сигнал уже есть / пауза 90 мин',
+ no_confirmed_signal:'Нет подтверждённого LONG/SHORT',
+ price_moved_from_entry:'Цена ушла от точки входа',
+ published:'Опубликовано новых сигналов',market_data_error:'Ошибка данных BingX',
+ unexpected_error:'Ошибка обработки',unknown:'Причина не определена'
+}
+const paperDecisionLabels:Record<string,string>={
+ opened:'Виртуальная позиция открыта', position_limit_or_same_symbol:'Лимит позиций или уже есть эта монета',
+ insufficient_virtual_budget:'Недостаточно виртуального бюджета по ограничениям риска',
+ insufficient_virtual_cash:'Недостаточно виртуальных средств'
+}
 const statusLabel=(s:string)=>({OPEN:'В работе',TP3:'Все TP',STOP:'Стоп',AMBIGUOUS:'TP/SL в одной свече',DATA_GAP:'Пробел в данных',EXPIRED:'Истёк срок',MANUAL:'Закрыта вручную'} as Record<string,string>)[s]||s
 
 export function PaperTrading({authorized,onOpen}:{authorized:boolean;onOpen:(symbol:string)=>void}){
@@ -82,6 +95,18 @@ export function PaperTrading({authorized,onOpen}:{authorized:boolean;onOpen:(sym
     data.stats.active===0?'В общей ленте уже есть сигналы, но демо учитывает только новые публикации после включения. Если новые сигналы появляются, а позиция нет — проверь Deploy Logs.':
     'Автоматический демо-мониторинг активен.'
    }</p>
+   <div className="paper-diag-hint" style={{marginTop:12}}>
+    <strong>Итог текущего прохода сканера</strong>
+    <p className="tiny-info">Причины показывают, почему монеты не дали новых сценариев. Наличие 3 старых сигналов не означает 3 новых демо-входа.</p>
+    {(Object.entries(autoFeed?.scanner.reasons||{}).sort((a,b)=>b[1]-a[1])).length===0?
+     <p className="tiny-info">Статистика появится после следующего обновления сканера.</p>:
+     <div className="paper-diag-grid">{Object.entries(autoFeed?.scanner.reasons||{}).sort((a,b)=>b[1]-a[1]).map(([code,count])=><div key={code}><small>{scanReasonLabels[code]||code}</small><strong>{count}</strong></div>)}</div>}
+    <p className="tiny-info">Последний новый сигнал: {autoFeed?.scanner.lastPublishedAt?time(autoFeed.scanner.lastPublishedAt)+' · '+(autoFeed.scanner.lastPublishedSymbol||''):'Нет данных о новых сигналах после обновления'}</p>
+   </div>
+   {(data.latestDecisions?.length||0)>0&&<div className="paper-diag-hint" style={{marginTop:12}}>
+    <strong>Результаты последних попыток демо-входа</strong>
+    {data.latestDecisions?.map((d,i)=><p className="tiny-info" key={i}>Сигнал #{d.signalId} · {time(d.createdAt)} — {paperDecisionLabels[d.reason]||d.reason}</p>)}
+   </div>}
    <p className="tiny-info">Значения обновляются по кнопке или каждые 20 секунд. Сигналы, появившиеся до включения демо, не открываются задним числом. Здесь не создаются тестовые или реальные ордера.</p>
   </div>
   <div className="section-header"><div><h2>Позиции и отработка</h2><p>По закрытым 1-минутным свечам BingX, без реального исполнения ордеров</p></div><div className="segment"><button className={view==='open'?'selected':''} onClick={()=>setView('open')}>Активные ({active.length})</button><button className={view==='closed'?'selected':''} onClick={()=>setView('closed')}>История ({closed.length})</button></div></div>

@@ -48,6 +48,9 @@ def open_for_signal(session, signal: db.AutoSignal, live_quote: float) -> list[t
     opened: list[tuple[int, int]] = []
     accounts = session.scalars(select(db.PaperAccount).where(db.PaperAccount.enabled.is_(True)).limit(200)).all()
     for account in accounts:
+        def audit(code: str):
+            session.add(db.PaperDecision(user_id=account.user_id,
+                                         auto_signal_id=signal.id, reason=code))
         # Server-side limits regardless of frontend flags.
         existing = session.scalar(select(db.PaperPosition.id).where(
             db.PaperPosition.user_id == account.user_id,
@@ -59,16 +62,19 @@ def open_for_signal(session, signal: db.AutoSignal, live_quote: float) -> list[t
             db.PaperPosition.user_id == account.user_id, db.PaperPosition.status.in_(('OPEN', 'DATA_GAP'))
         )).all()
         if len(active) >= config.PAPER_MAX_POSITIONS or any(p.symbol == signal.symbol for p in active):
+            audit('position_limit_or_same_symbol')
             continue
         budget = min(config.PAPER_RISK_FRACTION * account.initial_balance,
                      config.PAPER_RISK_FRACTION * max(0, account.cash))
         qty = min(budget / risk_per_unit,
                   (account.cash * config.PAPER_MAX_ALLOCATION) / (fill * (1 + config.PAPER_FEE_RATE)))
         if not math.isfinite(qty) or qty <= 0 or qty * fill < 5:
+            audit('insufficient_virtual_budget')
             continue
         cost = qty * fill
         entry_fee = cost * config.PAPER_FEE_RATE
         if cost + entry_fee > account.cash + 1e-7:
+            audit('insufficient_virtual_cash')
             continue
         account.cash -= cost + entry_fee
         position = db.PaperPosition(
@@ -82,6 +88,7 @@ def open_for_signal(session, signal: db.AutoSignal, live_quote: float) -> list[t
         )
         session.add(position)
         session.flush()
+        audit('opened')
         opened.append((account.user_id, position.id))
     return opened
 
@@ -231,9 +238,13 @@ def account_snapshot(session, user_id: int, prices: dict[str, float] | None):
     if not account:
         return {'enabled': False, 'exists': False, 'initialBalance': config.PAPER_START_USDT,
                 'cash': config.PAPER_START_USDT, 'equity': config.PAPER_START_USDT,
-                'positions': [], 'stats': {'closed': 0, 'win': 0, 'loss': 0, 'netPnl': 0.0}}
+                'positions': [], 'latestDecisions': [], 'stats': {'closed': 0, 'win': 0, 'loss': 0, 'netPnl': 0.0}}
     positions = session.scalars(select(db.PaperPosition).where(db.PaperPosition.user_id == user_id)
                                 .order_by(db.PaperPosition.id.desc())).all()
+    decisions = session.scalars(select(db.PaperDecision).where(db.PaperDecision.user_id == user_id)
+                                .order_by(db.PaperDecision.id.desc()).limit(6)).all()
+    latest_decisions = [{'signalId': d.auto_signal_id, 'reason': d.reason,
+                         'createdAt': d.created_at.isoformat()} for d in decisions]
     recent = positions[:150]
     fill_ids = [p.id for p in recent]
     fills = session.scalars(select(db.PaperFill).where(db.PaperFill.position_id.in_(fill_ids))
@@ -252,6 +263,7 @@ def account_snapshot(session, user_id: int, prices: dict[str, float] | None):
             'cash': round(account.cash, 6), 'equity': round(equity, 6) if equity is not None else None,
             'pricesFresh': fully_priced,
             'positions': [position_out(p, by_position.get(p.id, []), prices.get(p.symbol) if prices else None) for p in recent],
+            'latestDecisions': latest_decisions,
             'stats': {'closed': len(closed), 'win': sum(p.realized_pnl > 0 for p in closed),
                       'loss': sum(p.realized_pnl < 0 for p in closed),
                       'netPnl': round(sum(p.realized_pnl for p in positions), 6),

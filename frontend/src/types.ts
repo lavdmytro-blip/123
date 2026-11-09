@@ -10,7 +10,7 @@ export interface Watch {symbol:string;interval:Timeframe;lastSide:Side}
 export interface Settings {userId:number;language:'ru'|'en';theme:'dark'|'light';interval:Timeframe;notifications:boolean;chatConnected:boolean}
 export type Tab = 'home'|'terminal'|'auto'|'pump'|'history'|'trades'|'paper'|'alerts'|'settings'
 export interface AutoSignal {id:number;symbol:string;interval:Timeframe;side:Side;entry:number;stopLoss:number;takeProfits:number[];status:string;tpReached:number;createdAt:string;result:Signal}
-export interface ScannerProgress {total:number;scanned:number;round:number;lastSymbol:string;lastUpdate:string|null;lastCompleted:string|null;error:string}
+export interface ScannerProgress {total:number;scanned:number;round:number;lastSymbol:string;lastUpdate:string|null;lastCompleted:string|null;error:string;reasons?:Record<string,number>;lastPublishedAt?:string|null;lastPublishedSymbol?:string}
 export interface MarketFilterReport {mode:string;min24hTurnoverUSDT:number;minListingAgeDays:number;excludeNonstandard:boolean;ageSource?:string;failClosed?:boolean;evaluated?:number;eligible?:number;excluded?:number;reasons?:Record<string,number>;error?:string}
 export interface AutoFeedResponse {marketFilter?:MarketFilterReport;scanner:ScannerProgress;topSymbols:string[];signals:AutoSignal[];prices:Record<string,number>;pricesFresh:boolean;updatedAt:number;subscribed:boolean;scannerEnabled:boolean}
 
@@ -28,5 +28,5 @@ export interface PaperPosition {id:number;signalId:number;symbol:string;side:'LO
  marginOpen:number;realizedPnl:number;unrealizedPnl:number|null;fees:number;tpReached:number;
  lastPrice:number|null;lastChecked:number;createdAt:string;finishedAt:string|null;fills:PaperFill[]}
 export interface PaperAccountResponse {exists:boolean;enabled:boolean;initialBalance:number;cash:number;
- equity:number|null;pricesFresh?:boolean;positions:PaperPosition[];
+ equity:number|null;pricesFresh?:boolean;positions:PaperPosition[];latestDecisions?:{signalId:number;reason:string;createdAt:string}[];
  stats:{closed:number;win:number;loss:number;netPnl:number;active?:number};method?:string}
